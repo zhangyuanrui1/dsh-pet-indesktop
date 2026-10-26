@@ -378,10 +378,12 @@ headless，本机两个发行名同版本并存、都提供 `cv2` 顶层模块�
     （不会打出一个"能启动但语音永远不可用"的包）；
   - 运行期 `pet/asr.availability()` 给出人话原因（缺哪个文件、该放哪里），
     语音入口据此拒绝启动，其余功能照旧。
-  - 获取：**跑一次 `python scripts/fetch_asr_models.py`**（在仓库根目录）即可——
+  - 获取（三条路任选）：**设置 → 语音 → 「语音输入（说话给她听）」点「下载模型」**
+    （界面入口，逻辑同脚本）；或仓库根跑 **`python scripts/fetch_asr_models.py`**——
     默认先走镜像再直连，把 155 MB 的 `asr-models` 发行包下下来挑出
     `model.int8.onnx` / `tokens.txt`，再单独下 `silero_vad.onnx`；全程按上表
-    sha256 逐文件校验，断流自动续传重试，下完压缩包默认删除。
+    sha256 逐文件校验，断流自动换源续传，下完压缩包默认删除。两处共用
+    `pet/asr/fetch.py` 这一份实现。
     也可手动下载同一发行包放进 `resources/asr_models/`；或把模型放外置盘，
     用环境变量 `DSH_PET_ASR_MODEL_DIR` 指过去。
 - **Used by**：`pet/asr/recorder.py`（QAudioSource 录音 + Silero VAD 断句，

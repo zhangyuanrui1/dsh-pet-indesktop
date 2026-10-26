@@ -68,6 +68,7 @@ from ..voice_chime_tts_panel import (
     TtsBackendPanel,
     notice_row,
 )
+from .asr_model_row import AsrModelRow
 
 
 class VoiceChimeSettingsPage(QWidget):
@@ -174,6 +175,11 @@ class VoiceChimeSettingsPage(QWidget):
         self.preview_btn.setToolTip("按当前配置立即播报一句报时+台词（无需等待报时点）")
         self.preview_btn.clicked.connect(self._on_preview_clicked)
 
+        # ---- 语音输入：本地识别模型（229 MB，不入库）----
+        # 不是持久化设置项（下载动作 + 进度），所以它自己是整行控件而不是 SettingRow
+        # ——见 pet/voice/asr_model_row.py 的说明。
+        self.asr_model_row = AsrModelRow(self)
+
         # ---- Layout ----
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -223,6 +229,14 @@ class VoiceChimeSettingsPage(QWidget):
                     SettingRow("voice_chime_show_quote", "台词/歌词", "顺带念一句台词，每天整套换新。", self.quote_check),
                     SettingRow("voice_chime_preview", "立即试听", "马上按当前配置念一句。", self.preview_btn),
                 ],
+                self,
+            )
+        )
+
+        root.addWidget(
+            SettingsSection(
+                "语音输入（说话给她听）",
+                [self.asr_model_row],
                 self,
             )
         )
