@@ -22,7 +22,7 @@ from .base import (
     secret_fields,
     unregister,
 )
-from . import doubao, edge, mimo, sapi  # noqa: F401 —— import 即注册（edge 在前 = 默认后备；sapi 为离线本地后端）
+from . import doubao, edge, mimo, sapi, bailian  # noqa: F401 —— import 即注册（edge 在前 = 默认后备；sapi 为离线本地后端；bailian 排在最后，不抢默认）
 
 __all__ = [
     "FIELD_KINDS",
@@ -30,6 +30,7 @@ __all__ = [
     "TtsField",
     "TtsProvider",
     "TtsUnavailable",
+    "bailian",
     "doubao",
     "edge",
     "fallback_ids",

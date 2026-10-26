@@ -44,7 +44,7 @@ NOTICES = REPO / "THIRD_PARTY_NOTICES.md"
 #: 随包分发的两份声明（仓根）：项目自身的 MIT 许可 + 第三方素材/组件声明。
 BUNDLED_NOTICES = ("LICENSE", "THIRD_PARTY_NOTICES.md")
 #: 收费 TTS 后端（自带 API Key 字段）——它们的存在就是「keyring 必须随每个变体」的理由。
-PAID_PROVIDERS = ("doubao", "mimo")
+PAID_PROVIDERS = ("bailian", "doubao", "mimo")
 MIT_GRANT = "Permission is hereby granted, free of charge"
 METEORNOX_COPYRIGHT = "Copyright (c) 2025 MeteorNOX"
 

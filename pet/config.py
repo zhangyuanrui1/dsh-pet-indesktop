@@ -1316,7 +1316,7 @@ class Config:
             # 声音——mimo / doubao 都要用户自备 API Key，拿它们当默认等于新装即静音；
             # edge 不需要任何凭据，且失败照走既有自动回退。只改仓库默认值，不动任何人
             # 本机 config.json 里的显式取值。
-            "voice_chime_tts_backend": "edge",  # edge / mimo / sapi / doubao
+            "voice_chime_tts_backend": "edge",  # edge / mimo / sapi / doubao / bailian
             "voice_chime_tts_fallback": True,  # 主后端失败自动回退 edge
             "voice_chime_mimo_model": "mimo-v2.5-tts",  # 或 mimo-v2.5-tts-voicedesign
             "voice_chime_mimo_voice": "冰糖",  # 内置音色 id（中文名即 id）
@@ -1325,6 +1325,12 @@ class Config:
             "voice_chime_sapi_rate": 0,  # SAPI5 语速 −10..10（0 为系统默认）
             "voice_chime_doubao_speaker": "zh_female_peiqi_uranus_bigtts",  # 豆包 2.0 音色
             "voice_chime_doubao_pitch": 15,  # 豆包本地变调百分比（0–30）
+            # 阿里云百炼 CosyVoice：系统音色（含童声「龙呼呼」）走云端合成，API Key
+            # 只存系统钥匙串。默认 v3.5-flash + longhuhu（2026-10-26 机主账号免费
+            # 额度只有 v3.5 系两款；v3.5 音色 ID 不带 _v3 后缀，且不支持 Instruct）。
+            "voice_chime_bailian_voice": "longhuhu",  # 音色参数名
+            "voice_chime_bailian_instruct": "",  # Instruct 情绪/角色指令（仅 v2/v3 模型有效）
+            "voice_chime_bailian_model": "cosyvoice-v3.5-flash",  # 与音色配套的模型
             # 节日提醒（农历/24 节气/西方节日；命中当日用气泡告知并附氛围匹配文案）。
             # 总开关默认关闭：属"主动打扰"型功能，升级后不应突然冒出来，由用户显式开启。
             "festival_reminder_enabled": False,  # 节日提醒总开关
@@ -1618,6 +1624,9 @@ class Config:
             "voice_chime_sapi_rate",
             "voice_chime_doubao_speaker",
             "voice_chime_doubao_pitch",
+            "voice_chime_bailian_voice",
+            "voice_chime_bailian_instruct",
+            "voice_chime_bailian_model",
             "festival_reminder_enabled",
             "festival_reminder_cn",
             "festival_reminder_solar_terms",

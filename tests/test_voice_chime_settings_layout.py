@@ -56,7 +56,7 @@ TECHNICAL_MARKERS = (
     "keyring",
 )
 
-BACKEND_IDS = ("doubao", "edge", "mimo", "sapi")
+BACKEND_IDS = ("bailian", "doubao", "edge", "mimo", "sapi")
 
 
 def _qapp():
@@ -106,7 +106,7 @@ def test_current_backend_fields_are_flat_and_the_rest_are_folded(tmp_path):
             f"当前后端 edge 的 {spec.name} 必须平铺可见"
         )
 
-    for provider_id in ("doubao", "mimo", "sapi"):
+    for provider_id in ("bailian", "doubao", "mimo", "sapi"):
         header = _fold_header(page, provider_id)
         assert header.isVisibleTo(page), "折起来≠藏起来：折叠头必须看得见"
         assert header.label.text() == f"{tts.get(provider_id).label.split('（')[0]}{DISABLED_SUFFIX}"
@@ -156,7 +156,7 @@ def test_switching_backend_puts_it_on_top_and_folds_the_others(tmp_path):
     assert not _fold_header(page, "doubao").isVisibleTo(page)
 
     # 其余后端：各自的折叠头紧挨自己的字段，且顺序不随切换乱掉
-    for provider_id in ("edge", "mimo", "sapi"):
+    for provider_id in ("bailian", "edge", "mimo", "sapi"):
         header_at = keys.index(f"tts_backend_fold_{provider_id}")
         first_field = tts.get(provider_id).fields[0].key
         assert keys[header_at + 1] == first_field, f"{provider_id} 的折叠头必须紧挨它的字段"
