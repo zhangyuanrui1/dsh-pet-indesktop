@@ -48,6 +48,9 @@ TIMEOUT_S = 60
 DEFAULT_MODEL = "cosyvoice-v3.5-flash"
 DEFAULT_VOICE = "longhuhu"
 SAMPLE_RATE = 24000
+#: 语速用整数百分比配置（共享的 number 控件只吃整数），发请求换算成官方的倍数。
+#: 100 = 正常（对应 API 的 rate=1.0），50~200 对齐官方取值 [0.5, 2.0]。
+DEFAULT_RATE_PERCENT = 100
 
 #: 模型。**音色 ID 分两代，不能混用**（官方口径：一个模型的音色不能给另一个模型用）：
 #: - v3.5 系（v3.5-flash / v3.5-plus）：音色不带 _v3 后缀（龙呼呼=``longhuhu``），
@@ -114,6 +117,11 @@ class BailianTtsProvider(TtsProvider):
             kind="select", default="", options=INSTRUCT_OPTIONS, allow_custom=True,
         ),
         TtsField(
+            "rate", "voice_chime_bailian_rate", "语速",
+            "100 正常；80 慢读，150 加快。",
+            kind="number", default=DEFAULT_RATE_PERCENT, minimum=50, maximum=200, suffix=" %",
+        ),
+        TtsField(
             "model", "voice_chime_bailian_model", "模型",
             "换模型要配对的音色。",
             kind="select", default=DEFAULT_MODEL, options=MODEL_OPTIONS,
@@ -134,6 +142,7 @@ class BailianTtsProvider(TtsProvider):
             "api_key": str(values.get("api_key") or "").strip(),
             "voice": clean_voice(values.get("voice")),
             "instruct": _effective_instruct(model, values.get("instruct")),
+            "rate": clean_rate(values.get("rate")),
             "model": model,
             "ext": "mp3",
         }
@@ -147,6 +156,7 @@ class BailianTtsProvider(TtsProvider):
             model,
             clean_voice(values.get("voice")),
             _effective_instruct(model, values.get("instruct")),
+            f"rate={clean_rate(values.get('rate')):.2f}",
         ))
 
     def availability(self, values: dict) -> str:
@@ -169,6 +179,9 @@ class BailianTtsProvider(TtsProvider):
         instruct = str(plan.get("instruct") or "").strip()
         if instruct:
             body["input"]["instruction"] = instruct
+        rate = float(plan.get("rate") or 1.0)
+        if abs(rate - 1.0) > 1e-6:
+            body["input"]["rate"] = rate
 
         try:
             audio = _synthesize(body, key)
@@ -200,6 +213,20 @@ def clean_instruct(value) -> str:
     """Instruct 指令：单行、限长（官方要求整句中文指令，超长无意义）。"""
     text = " ".join(str(value or "").split())
     return text[:200]
+
+
+def clean_rate(value) -> float:
+    """语速：整数百分比（50~200，100=正常）换算成官方倍数（0.5~2.0）。
+
+    兼容直接填倍数的历史/手改配置：值 ≤ 10 时按倍数理解（1.0 = 正常）。
+    """
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        raw = DEFAULT_RATE_PERCENT
+    if raw <= 10:  # 已经是倍数口径
+        raw *= 100
+    return max(0.5, min(2.0, raw / 100.0))
 
 
 def _effective_instruct(model: str, value) -> str:

@@ -80,6 +80,7 @@ def test_default_chime_config_has_all_flat_keys():
         "voice_chime_bailian_voice",
         "voice_chime_bailian_instruct",
         "voice_chime_bailian_model",
+        "voice_chime_bailian_rate",
     }
     assert cfg["voice_chime_schedule"] in SCHEDULE_KEYS
     assert cfg["voice_chime_enabled"] is False  # 默认关闭：主动打扰型功能，用户显式开启

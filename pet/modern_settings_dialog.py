@@ -2156,6 +2156,17 @@ class ModernSettingsDialog(QDialog):
             voice_layout.setSpacing(18)
             if voice_chime_rows:
                 voice_layout.addWidget(SettingsSection("语音报时", voice_chime_rows, voice))
+            # 「语音输入（说话给她听）」整行是 AsrModelRow（QWidget，刻意不是
+            # SettingRow——见 pet/voice/asr_model_row.py 头注），上面的
+            # findChildren(SettingRow) 拾不到它；不在这里显式挂载，这一行会一直
+            # 留在已被隐藏的旧页容器里，设置页永远看不到（2026-10-26 机主实测踩坑）。
+            if (self.voice_chime_page is not None
+                    and getattr(self.voice_chime_page, "asr_model_row", None) is not None):
+                voice_layout.addWidget(SettingsSection(
+                    "语音输入（说话给她听）",
+                    [self.voice_chime_page.asr_model_row],
+                    voice,
+                ))
             if self.festival_page is not None:
                 voice_layout.addWidget(self.festival_page.build_domain_page(voice))
             voice_layout.addStretch(1)

@@ -1090,8 +1090,12 @@ def test_voice_domain_owns_only_tts_rows(tmp_path, monkeypatch):
         # 节日提醒整组由 festival_settings.build_domain_page 现造卡片收走
         # （何时提醒/提醒哪些日子/怎么提醒/你的生日/少用项）。本域不再按「一组行」
         # 拼小分组——那样页面容器会散架、分组标题会丢。
+        # 2026-10-26 起「语音报时」之后多一张「语音输入（说话给她听）」：AsrModelRow
+        # 不是 SettingRow，findChildren(SettingRow) 拾不到，必须显式挂载（否则下载
+        # 模型入口在域页里消失——机主实测踩过）。
         assert section_titles == [
             "语音报时",
+            "语音输入（说话给她听）",
             "何时提醒",
             "提醒哪些日子",
             "怎么提醒",
