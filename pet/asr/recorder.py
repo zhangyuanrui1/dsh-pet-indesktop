@@ -59,6 +59,51 @@ MAX_RECORD_SECONDS = 60.0
 _WATCHDOG_MS = 200
 
 
+def _error_name(err) -> str:
+    """把 Qt 音频错误枚举取成**名字字符串**（跨枚举类比较用）。
+
+    PySide6 里同一个错误值可能来自两个不同的枚举类：``QAudioSource.error()``
+    返回的是内部的 ``QtAudio.Error``，而 ``QAudio.Error`` 是另一个类，两者
+    ``==`` 恒为 False（value 都是 0 也不相等）。所以判定"有没有出错"只能比名字
+    或数值，不能比枚举对象。取不到名字时退回字符串形式。
+    """
+    name = getattr(err, "name", None)
+    if name:
+        return str(name)
+    text = str(err or "")
+    return text.rsplit(".", 1)[-1] if "." in text else text
+
+
+def _human_open_error(exc, device) -> str:
+    """把 Qt / WASAPI 的原始错误说成人话（这句话用户真会看到）。
+
+    只翻译**机主实测会撞上**的那几个码，其余原样带上一句中文兜底——宁可啰嗦，
+    也不要让用户对着 ``AUDCLNT_E_DEVICE_INVALIDATED`` 猜发生了什么。
+    """
+    name = ""
+    try:
+        name = str(device.description() or "")
+    except Exception:
+        name = ""
+    label = f"「{name}」" if name else "麦克风"
+    text = str(exc) if exc is not None else ""
+    upper = text.upper()
+    if "AUDCLNT_E_DEVICE_INVALIDATED" in upper or "0X88890004" in upper:
+        detail = "已经断开了（耳机拔了？没插紧？）"
+    elif "AUDCLNT_E_DEVICE_IN_USE" in upper or "0X8889000A" in upper:
+        detail = "被别的程序占着（关掉会议软件再试）"
+    elif "AUDCLNT_E_UNSUPPORTED_FORMAT" in upper or "0X88890008" in upper:
+        detail = "不支持 16 kHz 单声道"
+    elif _error_name(exc) == "OpenError":
+        # Qt 把 WASAPI 的内部失败吞成一句 OpenError，多半就是设备没了 / 被独占
+        detail = "打不开（设备已断开，或被别的程序占着）"
+    elif text:
+        detail = text[:80]
+    else:
+        detail = "被占用或驱动异常"
+    return f"{label}{detail}"
+
+
 class SpeechRecorder(QObject):
     """一次录音的生命周期：``start()`` → 若干 ``readyRead`` → ``finished``。
 
@@ -90,6 +135,21 @@ class SpeechRecorder(QObject):
         self._reset_buffers()
         self._started_at = 0.0
         self._active = False
+        # 设备管理器必须**长期持有**：Qt 只给活着的 QMediaDevices 实例发
+        # audioInputsChanged，临时调静态方法拿到的默认设备可能是已经拔走的端点
+        # （2026-10-26 机主实测：拔掉耳机后 defaultAudioInput() 仍返回那支耳机麦，
+        # 激活即 AUDCLNT_E_DEVICE_INVALIDATED）。
+        self._devices = None
+        #: 本进程内激活失败过的设备名（拔走的耳机、被独占的设备）。下次录音跳过它，
+        #: 设备列表变化（插回来 / 换设备）时清空——见 _on_devices_changed。
+        self._bad_devices: set[str] = set()
+        #: 每次录音新建的临时 QMediaDevices（保留引用：候选设备的句柄靠它活着）。
+        self._probe = None
+        #: 本次录音实际用的设备（中途失效时要知道是谁坏掉的）。
+        self._device = None
+        #: 上一次枚举到的输入设备名集合。变了就说明有人插/拔了设备，
+        #: 之前"打不开"的记录必须作废——否则插回来的耳机会一直被跳过。
+        self._device_snapshot: set[str] = set()
 
     # ---------------------------------------------------------------- 状态
     @property
@@ -112,13 +172,19 @@ class SpeechRecorder(QObject):
         ok, reason = availability()
         if not ok:
             return False, reason
+        # 注意：这两个名字在下面的循环里都要用，必须在 return 之后、无条件导入——
+        # 塞进上面的 if 分支会让成功路径上出现 UnboundLocalError。
+        # 不 import QAudio：错误枚举的**对象身份不可靠**（见 _error_name 的说明），
+        # 判定一律走名字字符串。
         try:
-            from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
+            from PySide6.QtMultimedia import QAudioFormat, QAudioSource
         except Exception as exc:  # pragma: no cover - 取决于构建
             return False, f"这台机器没有可用的录音组件（{type(exc).__name__}）"
 
-        device = QMediaDevices.defaultAudioInput()
-        if device.isNull():
+        # 候选设备：默认的那支优先，其余依次兜底。这样拔掉耳机（默认设备失效）后
+        # 会自动落到内置麦克风阵列，而不是直接报一句看不懂的英文错误码。
+        candidates = self._candidate_devices()
+        if not candidates:
             return False, "没有找到麦克风（系统声音设置里把输入设备设为默认再试）"
 
         fmt = QAudioFormat()
@@ -126,16 +192,49 @@ class SpeechRecorder(QObject):
         fmt.setChannelCount(1)
         fmt.setSampleFormat(QAudioFormat.Int16)
 
-        try:
-            source = QAudioSource(device, fmt)
-            # 50 ms 一包：readyRead 够勤，VAD 判定才跟得上口型；再小只是徒增回调。
-            source.setBufferSize(int(SAMPLE_RATE * 2 * 0.05))
-            io = source.start()
-        except Exception as exc:
-            logger.exception("启动录音失败")
-            return False, f"麦克风打不开（{type(exc).__name__}: {exc}）"
-        if io is None:
-            return False, f"麦克风打不开（{device.description()} 被占用或驱动异常）"
+        last_reason = ""
+        for device in candidates:
+            source = io = None
+            try:
+                source = QAudioSource(device, fmt)
+                # 50 ms 一包：readyRead 够勤，VAD 判定才跟得上口型；再小只是徒增回调。
+                source.setBufferSize(int(SAMPLE_RATE * 2 * 0.05))
+                io = source.start()
+            except Exception as exc:
+                logger.warning("打开输入设备失败：%s", exc)
+                reason = _human_open_error(exc, device)
+            else:
+                reason = _human_open_error(None, device) if io is None else ""
+                # start() 给了设备不代表真的在采音：拔走的端点会给一个空壳 io，
+                # 只有 error() 才诚实（症状是「录音了但一直没听到说话」）。
+                #
+                # 巨坑（2026-10-26 实测）：``QAudioSource.error()`` 返回的枚举类是
+                # **QtAudio.Error**，而 ``QAudio.Error`` 是另一个 Python 枚举类——
+                # 两者 value 都是 0 但 ``==`` 恒为 False！照字面写
+                # ``source.error() != QAudio.Error.NoError`` 会让**每一支**设备都被
+                # 判成失败（连好端端的麦克风也一样），于是全部拉黑、永远打不开。
+                # 所以只认名字 / 数值，不认枚举对象身份。
+                err = source.error()
+                if not reason and _error_name(err) != "NoError":
+                    reason = _human_open_error(err, device)
+            if reason:
+                last_reason = reason
+                self._bad_devices.add(device.description())
+                self._discard_source(source)
+                continue
+            break
+        else:
+            logger.error("所有输入设备都打不开：%s", last_reason)
+            # 逐支重试都失败时才补这句"都试过了"——单支设备的失败消息里不该带上它。
+            tried = "、".join(d.description() for d in candidates) or "（设备列表为空）"
+            return False, f"{last_reason or '麦克风打不开'}；都试过了：{tried}"
+
+        self._bad_devices.discard(device.description())
+        self._device = device
+        # 不连 stateChanged：本机 PySide6 会把 QtAudio::State 递给声明成
+        # QAudio::State 的槽，转换失败直接抛 "Cannot call meta function ...
+        # cannot be converted"，槽压根收不到（换 lambda 转接也一样，错误照旧）。
+        # 所以"录音中设备被拔"改由看门狗每 200 ms 轮询一次（见 _device_broken）。
 
         self._reset_buffers()
         self._source = source
@@ -161,6 +260,136 @@ class SpeechRecorder(QObject):
         if not self._active:
             return
         self._finish("手动结束")
+
+    # ---------------------------------------------------------------- 设备
+    def _device_manager(self):
+        """长期持有的 ``QMediaDevices``（只建一次，并监听设备增减）。
+
+        Qt 只给**活着的** QMediaDevices 实例发 ``audioInputsChanged``；每次录音
+        临时调静态方法，拿到的默认设备可能是早已拔走的端点。
+        """
+        if self._devices is None:
+            try:
+                from PySide6.QtMultimedia import QMediaDevices
+            except Exception:  # pragma: no cover - 取决于构建
+                return None
+            self._devices = QMediaDevices(self)
+            try:
+                self._devices.audioInputsChanged.connect(self._on_devices_changed)
+            except Exception:  # pragma: no cover - 取决于构建
+                pass
+        return self._devices
+
+    def _fresh_device_manager(self):
+        """**每次**新建一个 ``QMediaDevices``，只为拿到当前这一刻的设备句柄。
+
+        为什么要重新枚举：驱动在插拔耳机会**重建音频端点**，旧句柄整体作废。
+        机主实测——长期持有的实例拔掉耳机后仍把那支消失的 Realtek 端点列出来，
+        拿它去激活必报 ``AUDCLNT_E_DEVICE_INVALIDATED``；而新建实例能问到
+        系统当下的真实列表。
+        """
+        try:
+            from PySide6.QtMultimedia import QMediaDevices
+        except Exception:  # pragma: no cover - 取决于构建
+            return None
+        try:
+            return QMediaDevices()
+        except Exception:
+            logger.debug("临时枚举输入设备失败", exc_info=True)
+            return None
+
+    def _candidate_devices(self) -> list:
+        """可尝试的输入设备：默认那支优先，其余兜底；已知坏掉的排后面。
+
+        拔掉耳机后 Windows 仍把那支耳机麦当默认设备（激活必失败），所以必须
+        备好第二选择——否则语音输入就成了「插着耳机才能用」。
+        """
+        ordered: list = []
+        seen: set[str] = set()
+
+        def _take(mgr) -> None:
+            """把一个实例看到的设备收进候选（去重，默认那支排在最前）。"""
+            if mgr is None:
+                return
+            try:
+                default = mgr.defaultAudioInput()
+                if default is not None and not default.isNull():
+                    name = default.description()
+                    if name not in seen:
+                        seen.add(name)
+                        ordered.append(default)
+                for dev in mgr.audioInputs():
+                    name = dev.description()
+                    if name not in seen:
+                        seen.add(name)
+                        ordered.append(dev)
+            except Exception:
+                logger.debug("枚举输入设备失败", exc_info=True)
+
+        # 先问新建的实例（句柄最新），再用长期持有的那个补漏。
+        # 注意要留住引用：QAudioDevice 的可用性跟着来源实例走，实例被回收后
+        # 拿到的设备可能又变成无效句柄。
+        fresh = self._fresh_device_manager()
+        if fresh is not None:
+            self._probe = fresh
+        _take(fresh)
+        _take(self._device_manager())
+        if not ordered:
+            return []
+        # 设备增减自测：不能只靠 audioInputsChanged——Qt 在部分机器上不发这个
+        # 信号（机主实测：耳机拔了再插回来，录音仍卡在内置麦上）。所以每次录音
+        # 都自己比对一次列表；**新出现的设备排到最前面**——刚插上的耳机 / 刚连上
+        # 的蓝牙耳机，多半就是用户这时候想用的那支。首次枚举没有"新增"可言，
+        # 保持默认设备优先。
+        names = {d.description() for d in ordered}
+        fresh = set() if not self._device_snapshot else (names - self._device_snapshot)
+        if names != self._device_snapshot:
+            logger.info("输入设备列表变了（%s）",
+                        "、".join(sorted(names ^ self._device_snapshot)) or "")
+            self._bad_devices.clear()
+            self._device_snapshot = names
+        if fresh:
+            ordered = ([d for d in ordered if d.description() in fresh]
+                       + [d for d in ordered if d.description() not in fresh])
+        healthy = [d for d in ordered if d.description() not in self._bad_devices]
+        # 全被拉黑过（刚拔完设备、列表还没刷新）时给一次机会：重试默认那支。
+        return healthy or ordered
+
+    def _on_devices_changed(self) -> None:
+        """输入设备增减（插/拔耳机、USB 麦）：清掉拉黑记录，让新设备能被用上。"""
+        if self._bad_devices:
+            logger.info("输入设备列表变了，重置失败记录：%s",
+                        "、".join(sorted(self._bad_devices)))
+            self._bad_devices.clear()
+
+    def _on_source_state_changed(self, state) -> None:
+        """录音途中设备没了（耳机被拔）：立刻收尾，别让用户对着空气说话。"""
+        if not self._active:
+            return
+        # 同 _error_name 的坑：stateChanged 递进来的是 QtAudio.State，拿它和
+        # QAudio.State.StoppedState 用 == 比永远是 False，所以比名字。
+        stopped = _error_name(state) == "StoppedState"
+        if not stopped:
+            return
+        name = ""
+        try:
+            name = self._device.description() if self._device is not None else ""
+        except Exception:
+            name = ""
+        if name:
+            self._bad_devices.add(name)
+        logger.warning("录音中设备失效：%s", name or "未知设备")
+        self._finish("设备断开")
+
+    @staticmethod
+    def _discard_source(source) -> None:
+        """丢弃一个打开失败的 QAudioSource（不留句柄、不抛错）。"""
+        if source is None:
+            return
+        try:
+            source.stop()
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- 内部
     def _reset_buffers(self) -> None:
@@ -286,9 +515,35 @@ class SpeechRecorder(QObject):
         if quiet >= self._silence_s:
             self._finish(f"静音 {quiet:.1f} 秒")
 
+    def _device_broken(self) -> bool:
+        """录音中设备是不是没了（耳机被拔 / 被别的程序抢走）。
+
+        轮询而不是监听信号——见 start() 里关于 stateChanged 的说明：这个 PySide6
+        版本根本递不过来。每 200 ms 问一次设备，代价可以忽略，但能避免用户对着
+        一支已经拔走的麦克风说完一整句。
+        """
+        source = self._source
+        if source is None:
+            return False
+        try:
+            if _error_name(source.error()) != "NoError":
+                return True
+            return _error_name(source.state()) == "StoppedState"
+        except Exception:
+            logger.debug("查询录音设备状态失败（可能已析构）", exc_info=True)
+            return False
+
     def _on_watchdog(self) -> None:
         """兜住「设备不回调」：readyRead 一次都不来时也要能退出录音态。"""
         if not self._active:
+            return
+        if self._device_broken():
+            try:
+                if self._device is not None:
+                    self._bad_devices.add(self._device.description())
+            except Exception:
+                pass
+            self._finish("设备断开")
             return
         elapsed = time.monotonic() - self._started_at
         if elapsed >= self._max_wait_s and self._total == 0:
@@ -337,6 +592,7 @@ class SpeechRecorder(QObject):
             except Exception:
                 logger.debug("断开录音信号失败（可能已断开）", exc_info=True)
         if source is not None:
+            # 不再连 stateChanged（见 start() 的说明），也就无需断开。
             try:
                 source.stop()
             except Exception:
