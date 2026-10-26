@@ -550,6 +550,11 @@ def _app_dir_name() -> str:
 
 APP_DIR_NAME = _app_dir_name()
 
+#: 语音对话「静音多久算说完」的默认秒数。与 ``pet.voice_talk.DEFAULT_SILENCE_SECONDS``
+#: 同值：这里是**归一化兜底**（配置缺失/脏值时用），那边是**配置不可读时的兜底**。
+#: 两处都留常量而不是互相 import——``voice_talk`` 拖 Qt，config 是纯逻辑层。
+DEFAULT_VOICE_TALK_SILENCE_SECONDS = 1.0
+
 
 def _float_or_default(value, default, minimum, maximum):
     try:
@@ -1371,6 +1376,13 @@ class Config:
             "hotkey_open_chat": "",
             "hotkey_look_screen": "",
             "hotkey_screen_capture": "",
+            # 语音对话（按住说话式）：按下开始录音、静音自动收尾或再按一次收尾。
+            # 默认不绑 = 功能完全不激活（不建控制器、不占麦克风），与其余热键同口径。
+            "hotkey_voice_talk": "",
+            # 静音多少秒算"说完了"（方案 A 的收尾判据）。1 秒是实测的舒适点：
+            # 更短会在换气处被截断，更长则每句都要干等。范围由 voice_talk 收紧到
+            # 0.4~3.0，这里只存用户值，不在配置层夹取（设置页给的是滑杆）。
+            "voice_talk_silence_seconds": 1.0,
             "weather_enabled": True,  # 天气功能总开关
             "weather_city": "",  # 当前城市（空 = 还没选，菜单会引导去添加）
             "weather_city_list": [],  # 城市清单（全局，上限 12，见 weather.MAX_CITIES）
@@ -1674,6 +1686,8 @@ class Config:
             "hotkey_open_chat",
             "hotkey_look_screen",
             "hotkey_screen_capture",
+            "hotkey_voice_talk",
+            "voice_talk_silence_seconds",
             "feature_activation",
         ):
             if key not in raw:
@@ -1997,8 +2011,14 @@ class Config:
         # 归一化放在这里而不是只靠设置页，是因为配置文件可能被手改。
         from . import hotkey_spec as _hotkey_spec
         for _hotkey_key in ("hotkey_open_chat", "hotkey_look_screen",
-                            "hotkey_screen_capture"):
+                            "hotkey_screen_capture", "hotkey_voice_talk"):
             self.data[_hotkey_key] = _hotkey_spec.normalize(self.data.get(_hotkey_key))
+        # 语音对话的静音收尾秒数：手改配置可能写成 "1"、null、甚至负数。夹取在
+        # config 层做一次是为了让**读方**（voice_talk）不必各自防脏值——那里的
+        # 范围收紧只管"产品可接受区间"，不是脏值防线。
+        self.data["voice_talk_silence_seconds"] = _float_or_default(
+            self.data.get("voice_talk_silence_seconds"),
+            DEFAULT_VOICE_TALK_SILENCE_SECONDS, 0.4, 3.0)
         # 枚举键必须先 str() 再判成员：直接 `x not in {...}` 遇到 list/dict 抛
         # TypeError: unhashable type（json 合法脏值），Config() 构造失败 → 启动崩、
         # 连独立设置页都进不去。同族写法一律抄这一行。

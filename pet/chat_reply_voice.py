@@ -198,6 +198,20 @@ class ChatReplyReader:
         self._subscribed = False
         self._queue.clear()
 
+    def interrupt(self) -> None:
+        """打断本轮朗读：清掉还没送出去的句子，**保留订阅**。
+
+        与 :meth:`stop` 的分工是硬性的——``stop`` 是退出收口（退订、此后再不朗读），
+        ``interrupt`` 是"这一轮别念了"：用户按热键要说话，掐掉当前声音之后，下一条
+        回复照样该被念出来。用 ``stop`` 顶替会让语音对话只在第一句之后彻底失声。
+
+        本方法只管"还没送进通道的句子"；**正在出声那一段由音频通道停**
+        （``VoiceChimeService.interrupt_speech``），两处都要调才算真的安静。
+        """
+        self._generation += 1
+        self._pump_scheduled = False
+        self._queue.clear()
+
     # ---------------------------------------------------------------- 数据流
     def feed(self, text: str) -> None:
         """收到一条完整回复：拆句、替换队列、开始念。"""

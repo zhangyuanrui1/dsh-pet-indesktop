@@ -267,6 +267,11 @@ FEATURES: dict[str, FeatureSpec] = {
             "click_show_self_talk",
             "self_talk_voice_precache_enabled",
             "self_talk_texts",
+            # 语音对话（本地录音 + 断句 + 识别）：输入侧能力，与上面的合成侧共用
+            # 同一个「语音」模块开关——停用语音模块即连语音输入一起停，不用记两处。
+            # 默认不绑热键 = 不建控制器、不占麦克风。
+            "hotkey_voice_talk",
+            "voice_talk_silence_seconds",
         ),
         needs_network=True,  # edge / MiMo / 豆包三个后端都在合成线程里联网
         needs_paid=False,

@@ -336,3 +336,54 @@ headless，本机两个发行名同版本并存、都提供 `cv2` 顶层模块�
   `scripts/export_android_assets.py::copy_notices`，2026-10-17 起）。
 - 手机使用的 WebP 动画与图标由第 2 节角色素材派生，继续保留其署名和
   个人非商业使用限制。工具与验收说明见 [Android 文档](docs/ANDROID.md)。
+
+## 10. 本地语音识别（语音对话：SenseVoice-Small + Silero VAD + sherpa-onnx）
+
+> v4.4.x 新增。语音对话（全局快捷键）把用户说的话识别成文字再交给聊天，
+> **识别全程在本机完成，不联网、不上传、不落盘**（录音只在内存里缓冲，识别完即丢）。
+
+- **随包模型 Files**（`resources/asr_models/`，共 240,193,589 字节 ≈ 229 MiB，
+  下表为本机实测字节与摘要）：
+
+  | 文件 | 字节 | sha256 |
+  | --- | --- | --- |
+  | `model.int8.onnx`（SenseVoice-Small 识别，int8 量化） | 239,233,841 | `c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51` |
+  | `tokens.txt`（识别词表） | 315,894 | `f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc` |
+  | `silero_vad.onnx`（Silero VAD v4/v5，断句用） | 643,854 | `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6` |
+
+- **Origin / Source**：
+  - 识别模型由 **k2-fsa/sherpa-onnx** 从 FunAudioLLM 的 SenseVoice-Small 导出并做
+    int8 动态量化，发行包名 `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17`
+    （https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models ）。
+    上游模型：https://github.com/FunAudioLLM/SenseVoice ，权重
+    `FunAudioLLM/SenseVoiceSmall`；权利归**阿里巴巴集团**及其贡献者。
+  - `silero_vad.onnx` 取自 **snakers4/silero-vad**
+    （https://github.com/snakers4/silero-vad ，MIT），按 sherpa-onnx 的
+    `VoiceActivityDetector` 要求的输入形状导出。
+- **License / 权利口径（⚠️ 逐条读，别按"跟 onnxruntime 一样"想当然）**：
+  - **SenseVoice-Small 的许可上游有两种声明**：ModelScope 的模型页标 *Apache-2.0*，
+    而 sherpa-onnx 与第三方合规审计按 **FunASR Model Open Source License
+    Agreement v1.1** 对待。本项目**按较严格的一档履行**：
+    §2.2 要求注明出处与权利人、保留模型名称——本节与 `pet/asr/` 的模块说明即为此；
+    §3 声明该软件"仅作为参考和学习使用"、不承担损失；§4.2 把"对软件或其输出作
+    无端诋毁、恶意抹黑"视作自动放弃许可；§6 允许权利人后续修订并自动生效。
+    分发时请连同本节一起带走。
+  - `silero_vad.onnx`：**MIT**（snakers4/silero-vad）。
+  - 运行库：`sherpa-onnx`（Apache-2.0）、`onnxruntime`（MIT，与第 7 节同一引擎）。
+- **为什么这批模型不入库**：`model.int8.onnx` 单个 229 MB，超过 GitHub 的 100 MB
+  单文件硬上限（入库会让 clone 与 push 直接失败）；第 7 节 rapidocr 那批 31 MB
+  才走"入库 + 打包门校验"的路子。这里的替代做法是：
+  - `.gitignore` 忽略 `resources/asr_models/`；
+  - `scripts/build_onedir.ps1` 在打包前**硬校验**三个文件存在，缺任一即中止
+    （不会打出一个"能启动但语音永远不可用"的包）；
+  - 运行期 `pet/asr.availability()` 给出人话原因（缺哪个文件、该放哪里），
+    语音入口据此拒绝启动，其余功能照旧。
+  - 获取：下载上述 sherpa-onnx `asr-models` 发行包，把 `model.int8.onnx`、
+    `tokens.txt` 与 `silero_vad.onnx` 放进 `resources/asr_models/` 即可；
+    也可用环境变量 `DSH_PET_ASR_MODEL_DIR` 指到别的目录（模型放外置盘/换机器时用）。
+- **Used by**：`pet/asr/recorder.py`（QAudioSource 录音 + Silero VAD 断句，
+  不引入新依赖）、`pet/asr/sensevoice.py`（ONNX Runtime CPU 推理）、
+  `pet/voice_talk.py`（热键状态机）。实测（i7-12700，8.95 秒录音）：
+  4 线程 0.20 秒 / 2 线程 0.70 秒 / 1 线程 1.82 秒。
+- **测试数据**：识别只接受内存里的 PCM，不读用户录音文件；仓库内不含任何用户音频。
+

@@ -414,6 +414,30 @@ class QuickChatBubble(QFrame):
         self._request_pet_window = self.pet_window
         self._active_request_id = self.service.send(messages, config)
 
+    def submit_text(self, text: str) -> bool:
+        """外部投递一句话并直接发送（语音输入用）。返回是否接受了这句话。
+
+        走 ``_send`` 而同构于回车发送；生成中等 worker 退干净再发，三次仍忙就把
+        文字留在输入框（理由同 ``chat/widgets.py::submit_text``：``stop()`` 只置
+        取消标志，线程没退完时直接发会被 ``_send`` 的「生成中」分支吃掉）。
+        """
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return False
+        self._submit_when_idle(cleaned, 0)
+        return True
+
+    def _submit_when_idle(self, text: str, attempt: int) -> None:
+        if self.service.busy:
+            self.service.stop()
+            if attempt < 3:
+                QTimer.singleShot(120, lambda: self._submit_when_idle(text, attempt + 1))
+                return
+            self.input.setText(text)
+            return
+        self.input.setText(text)
+        self._send()
+
     def _started(self, request_id: str) -> None:
         if request_id != self._active_request_id:
             return

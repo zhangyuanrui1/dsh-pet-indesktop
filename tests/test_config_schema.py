@@ -97,6 +97,9 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "hotkey_open_chat",
         "hotkey_look_screen",
         "hotkey_screen_capture",
+        # 语音对话：热键 + 静音收尾秒数（2026-10-26 随本地 ASR 一起进来）
+        "hotkey_voice_talk",
+        "voice_talk_silence_seconds",
         "harness_autostart",
         "harness_launch_target",
         "idle_low_fps_enabled",
@@ -250,6 +253,8 @@ SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "ch
 # 一次；共创者定稿的 token 成本闸），白名单 159。
 # 2026-10-22 加场景扮演 3 键（roleplay_enabled / roleplay_scene / roleplay_cast；
 # 每宠键，默认关/空），白名单 162。
+# 2026-10-26 加语音对话 2 键（hotkey_voice_talk 默认不绑 / voice_talk_silence_seconds
+# 默认 1.0 秒）：本地 ASR 的按下说话入口，不绑热键即功能完全不激活。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 

@@ -92,6 +92,24 @@ numpy>=1.26
 omegaconf>=2.3
 opencv-python-headless>=4.5.1.48
 
+# —— 语音对话：本地语音输入（pet/asr/）——
+# 录音侧不新增依赖（QAudioSource 随 PySide6），这一条同时带两样东西：
+#   * SenseVoice-Small 识别（OfflineRecognizer）——模型 model.int8.onnx 229 MB；
+#   * Silero VAD 断句（VoiceActivityDetector）——模型 silero_vad.onnx 629 KB。
+# 两个模型都放 resources/asr_models/，走 ONNXRuntime（与快速识屏同一套引擎，
+# 引擎那条依赖已在下面声明）。推理纯 CPU：i7-12700 上 8.95 秒音频 0.20 秒
+# （4 线程）/ 0.70 秒（2 线程）/ 1.82 秒（1 线程）。
+#
+# **为什么不用云端 ASR**：本地比一次云端往返还快，离线可用，语音不出本机；
+# 代价只有打包体积（229 MB 模型 + ~40 MB wheel）。
+#
+# 版本下限取实测过的 2.0：`from_sense_voice` 与 `VoiceActivityDetector` 的
+# 构造签名（VadModelConfig / SileroVadModelConfig 字段名）在 2.0 上核对过，
+# 更早的版本字段名不一致会直接 TypeError——所以不写一个没验过的宽区间。
+# 打包三个脚本需 --collect-all sherpa_onnx（它带 .pyd 与共享库，
+# 静态分析收不全；漏收的症状是"源码能跑、打包版 ImportError"）。
+sherpa-onnx>=2.0
+
 # —— 开发依赖（测试 + 静态检查）——
 # pytest：测试套件入口（README「测试与验证」与本仓库 CI 都依赖它）。
 # ruff：`ruff check pet/ tests/` 用的静态检查器（规则基线见 pyproject.toml

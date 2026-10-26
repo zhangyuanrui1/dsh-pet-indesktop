@@ -463,3 +463,62 @@ def test_mirror_frame_falls_back_to_mirrored_without_flipped(monkeypatch):
     assert sprite._rebuild_pixmap() is True
 
     assert sprite._hit_image == with_flipped, "回退分支必须与 flipped 逐像素一致"
+
+
+# ------------------------------------------- 换库：旧 clip 的 C++ 对象已被销毁
+class _DeadClip(FakeClip):
+    """``stop()`` 抛 RuntimeError 的 clip：模拟旧库 shutdown 后对象被删。
+
+    实测现象（新角色 + 子宠换角色必现）：库收尾连带销毁了 clip 的 QTimer，
+    sprite 却仍留着引用 → 下个 tick ``bind_clip`` 在 stop() 处抛
+    ``Internal C++ object already deleted``；因为异常挡在「换新 clip」之前，
+    sprite 永久停在死 clip 上，每个 tick 刷一次 traceback、动画彻底不动。
+    """
+
+    def stop(self):
+        self.stop_count += 1
+        raise RuntimeError(
+            "libshiboken: Internal C++ object (PySide6.QtCore.QTimer) already deleted.")
+
+
+def test_bind_clip_survives_clip_dead_after_library_shutdown():
+    """换库后 bind 必须能绑上新 clip：死 clip 的 stop() 异常要就地吞掉。"""
+    dead = _DeadClip()
+    sprite = _make_sprite(dead)
+    assert sprite.bind_clip("walk") is True
+
+    fresh = FakeClip()
+    sprite.library = FakeLibrary(fresh)          # 换库（旧库随后 shutdown）
+    assert sprite.bind_clip("turn") is True      # 不得抛出，且要真的换上
+    assert sprite._clip is fresh
+    assert sprite._clip_name == "turn"
+    assert fresh.start_count == 1
+
+
+def test_detach_clip_drops_reference_but_keeps_callbacks():
+    """detach 只摘 clip：换库后 sprite 仍在同一壳里跑，回调断了下个 tick 就没人驱动。"""
+    clip = FakeClip()
+    sprite = _make_sprite(clip)
+    assert sprite.bind_clip("walk") is True
+    dirty = lambda *_a: None                     # noqa: E731 - 只验引用是否保留
+    sprite._dirty_cb = dirty
+
+    sprite.detach_clip()
+
+    assert sprite._clip is None
+    assert sprite._clip_name is None
+    assert clip.stop_count == 1                  # 解绑时停解码
+    assert sprite._dirty_cb is dirty             # 回调原样保留
+
+
+def test_close_after_detach_does_not_stop_twice():
+    """detach 之后再 close（换库后 sprite 被移除）：不得二次 stop 已销毁的 clip。"""
+    clip = FakeClip()
+    sprite = _make_sprite(clip)
+    assert sprite.bind_clip("walk") is True
+
+    sprite.detach_clip()
+    sprite.close()
+
+    assert clip.stop_count == 1
+

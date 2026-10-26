@@ -1444,14 +1444,49 @@ def test_vision_hotkeys_not_registered_when_inactive():
     _freeze_all_but("vision")
     app_mod.AppShell._apply_global_hotkeys(shell)
     bindings, callbacks = service.calls[-1]
-    assert bindings == {"open_chat": "ctrl+alt+c"}  # 视觉两条不在
-    assert set(callbacks) == {"open_chat"}
+    # 视觉两条不在；语音对话这一轮没配键，空值不进绑定表
+    assert bindings == {"open_chat": "ctrl+alt+c"}
+    # 回调表与视觉无关：语音对话照常在（它只受"有没有聊天"影响）
+    assert set(callbacks) == {"open_chat", "voice_talk"}
 
     fa.freeze_snapshot_for_tests(MIGRATION_BASELINE)
     app_mod.AppShell._apply_global_hotkeys(shell)
     bindings, callbacks = service.calls[-1]
     assert set(bindings) == {"open_chat", "look_screen", "screen_capture"}
-    assert set(callbacks) == {"open_chat", "look_screen", "screen_capture"}
+    assert set(callbacks) == {"open_chat", "look_screen", "screen_capture", "voice_talk"}
+
+
+def test_voice_talk_hotkey_registered_with_chat():
+    """配了键就进绑定表；没配（空串）就不进——表里只留这次真的要注册的动作。"""
+    import pet.app as app_mod
+
+    service = _FakeHotkeyService()
+    shell = _hotkey_shell(_cfg_obj(
+        hotkey_open_chat="ctrl+alt+c",
+        hotkey_voice_talk="ctrl+alt+v",
+    ), service)
+
+    app_mod.AppShell._apply_global_hotkeys(shell)
+    bindings, callbacks = service.calls[-1]
+    assert bindings == {"open_chat": "ctrl+alt+c", "voice_talk": "ctrl+alt+v"}
+    assert "voice_talk" in callbacks
+
+
+def test_voice_talk_hotkey_not_registered_without_chat():
+    """无聊天变体（--no-chat）里识别出来无处投递：绑定表与回调表都不留这条。"""
+    import pet.app as app_mod
+
+    service = _FakeHotkeyService()
+    shell = _hotkey_shell(_cfg_obj(
+        hotkey_open_chat="ctrl+alt+c",
+        hotkey_voice_talk="ctrl+alt+v",
+    ), service)
+    shell.enable_chat = False
+
+    app_mod.AppShell._apply_global_hotkeys(shell)
+    bindings, callbacks = service.calls[-1]
+    assert bindings == {"open_chat": "ctrl+alt+c"}
+    assert "voice_talk" not in callbacks
 
 
 def test_vision_hotkey_callbacks_do_nothing_when_inactive():

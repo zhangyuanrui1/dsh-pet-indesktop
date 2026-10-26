@@ -321,6 +321,20 @@ if (-not $SkipBuild) {
         '--add-data', "$rapidocrDir\default_models.yaml;rapidocr"
     )
 
+    # 语音对话（pet/asr/）的本地模型：SenseVoice-Small 识别 229 MB + Silero VAD
+    # 629 KB。**整目录进包**，不做"可选不打包"——这条链路的价值就是离线可用，
+    # 打半套（有识别没断句）等于让它永远停在"不可用"。
+    # 缺文件时 pet/asr.availability() 会返回一句人话原因、语音入口拒绝启动，
+    # 其余功能照旧，所以打不齐不会炸，但会白占体积又不能用——这里先硬校验。
+    foreach ($asrName in @('model.int8.onnx', 'tokens.txt', 'silero_vad.onnx')) {
+        if (-not (Test-Path (Join-Path 'resources\asr_models' $asrName))) {
+            throw "[asr] model file missing: resources\asr_models\$asrName (see pet/asr/__init__.py)"
+        }
+    }
+    $asrData = @(
+        '--add-data', 'resources\asr_models;resources\asr_models'
+    )
+
     # 两个模块必须显式 hidden-import（2026-10-13 交叉审查 B1；切片 5 加了第二个）：
     #
     # 1. 宿主侧引擎 `pet.screen_capture.ocr`——截图动作走的是**动态** seam
@@ -386,6 +400,7 @@ if (-not $SkipBuild) {
         --collect-all aiofiles `
         --collect-all tzdata `
         --collect-all psutil `
+        --collect-all sherpa_onnx `
         @keyringCollect `
         --add-data $datas `
         --add-data "assets\big_blue_fat_fish;assets\big_blue_fat_fish" `
@@ -401,6 +416,7 @@ if (-not $SkipBuild) {
         --add-data "resources\presentmon;resources\presentmon" `
         @rapidocrData `
         @rapidocrHidden `
+        @asrData `
         @excludes `
         $entry
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed: $LASTEXITCODE" }

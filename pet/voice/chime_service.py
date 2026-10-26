@@ -587,6 +587,42 @@ class VoiceChimeService:
         self._timer.stop()
         self._detach_quiet_listener()
 
+    def interrupt_speech(self) -> bool:
+        """立刻掐断本轮播报，但**不停服务**。返回之前是否真有东西被掐掉。
+
+        与 :meth:`stop` 的分工（这条边界必须守住）：``stop`` 是收口——停调度、
+        摘免打扰监听、此后这个实例不再出声；``interrupt`` 是"让一让"——用户按下
+        语音热键要说话，把当前这段停住、把还没出声的作废，**调度照跑**。用 ``stop``
+        顶替会让语音对话只在第一句之后彻底静音（下一次回复朗读时通道已停）。
+
+        四件事一件都不能少，少一件就还有声音漏出来：
+
+        1. 停当前段并清空音源（``_stop_current_segment``，含 ``stop()`` 治不掉的
+           ``LoadingMedia`` 死局）；
+        2. 待播语音出队口作废（``_pending_speech``）；
+        3. 到点报时补播作废（``_queued_fire``）；
+        4. **在飞的合成作废**——只清 ``_busy`` 不够，合成线程回来时若代次还匹配，
+           它会把结果直接播出来（网络慢时正好在用户开口那一刻响），所以必须
+           ``_next_synthesis_generation()``。
+        """
+        had_audio = bool(
+            getattr(self, "_pending_speech", None)
+            or getattr(self, "_queued_fire", None)
+            or getattr(self, "_busy", False)
+            or (self._player is not None and not self._channel_idle())
+        )
+        self._stop_current_segment()
+        self._pending_speech = None
+        self._queued_fire = None
+        if getattr(self, "_busy", False):
+            self._busy = False
+            self._synthesis_role = "play"
+            self._next_synthesis_generation()
+        self._disarm_unlock_timer()
+        if had_audio:
+            logger.info("语音播报被打断（用户开始说话）")
+        return had_audio
+
     def is_running(self) -> bool:
         """调度 tick 是否在跑（AppShell 的懒启停门控据此决定重启还是只刷配置）。"""
         return bool(self._timer.isActive())

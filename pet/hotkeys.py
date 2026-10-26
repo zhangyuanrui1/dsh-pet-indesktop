@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """进程级全局快捷键服务：``RegisterHotKey`` → ``WM_HOTKEY`` → 回调。
 
-三个动作用户可各绑一个组合键（默认**都不绑**，行为与加这个功能之前逐位相同）：
+四个动作用户可各绑一个组合键（默认**都不绑**，行为与加这个功能之前逐位相同）：
 
 ===============  ============================================  ==========================
 动作             落在哪个既有入口                                备注
@@ -9,11 +9,12 @@
 ``open_chat``    ``PetInstance.open_chat``                     右键菜单「AI 对话」同一条
 ``look_screen``  ``OverlayShell.look_at_screen(sprite=None)``   右键「看看屏幕」；``None`` = 主宠
 ``screen_capture`` ``OverlayShell.on_screen_capture``           右键「截图提问」同一条
+``voice_talk``   ``VoiceTalkController.toggle``                语音对话（本地录音+识别）
 ===============  ============================================  ==========================
 
 纪律：
 
-- **不复制实现**：三个回调由 :class:`~pet.app.AppShell` 注入，这里只负责按键 → 动作。
+- **不复制实现**：四个回调由 :class:`~pet.app.AppShell` 注入，这里只负责按键 → 动作。
 - **独占失败要报**：Windows 的全局热键表是独占的，``RegisterHotKey`` 失败（通常是
   已被别的程序占用）时把失败项返回给调用方与日志，绝不假装成功。
 - **回调不在原生消息里直接跑**：``WM_HOTKEY`` 是在事件过滤器中同步到达的，重活
@@ -43,6 +44,9 @@ ACTIONS: dict[str, str] = {
     "open_chat": "hotkey_open_chat",
     "look_screen": "hotkey_look_screen",
     "screen_capture": "hotkey_screen_capture",
+    # 语音对话：按一下开始录音，静音 1 秒自动收尾；录音中再按一次立刻收尾。
+    # 朗读中按 = 先打断朗读再开始录音（时序见 pet/voice_talk.py）。
+    "voice_talk": "hotkey_voice_talk",
 }
 
 #: 动作的中文名（日志/提示用）
@@ -50,6 +54,7 @@ ACTION_LABELS: dict[str, str] = {
     "open_chat": "AI 对话",
     "look_screen": "看看屏幕",
     "screen_capture": "截图提问",
+    "voice_talk": "语音对话",
 }
 
 #: 注册 id 基址（进程内唯一即可；不与 Windows 预定义热键冲突）

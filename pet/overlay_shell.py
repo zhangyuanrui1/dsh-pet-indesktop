@@ -194,6 +194,24 @@ def _resolve_self_talk_image_dir(raw: str) -> str:
     return str(resolve_fun_asset(raw, oijingjing_image_path().parent))
 
 
+def _detach_sprite_clip(sprite) -> None:
+    """换素材库前把 sprite 从旧 clip 上摘下来（无该方法时静默跳过）。
+
+    **为什么用 getattr 而不是直接调**：这条链路上的 sprite 不止一种实现——真实
+    ``PetSprite`` 持有 clip（有 ``detach_clip``），而岛精灵与测试替身根本不持有
+    clip。对后者来说"没有这个方法"就等于"没有要解绑的东西"，不是缺陷；硬调只会
+    在换角色时把测试替身打挂，而真实路径本来就不该为替身付代价。
+
+    顺序是硬性的：必须在旧库 ``shutdown()`` **之前**调用——旧库一关，clip 的
+    C++ 对象（含 QTimer）就没了，之后再摘就会撞上
+    ``Internal C++ object already deleted``，且异常发生在换新 clip 之前，
+    sprite 会永远停在死 clip 上（每 tick 刷 traceback、动画卡死）。
+    """
+    detach = getattr(sprite, "detach_clip", None)
+    if callable(detach):
+        detach()
+
+
 def _import_quick_chat():
     """取 ``QuickChatBubble``；无聊天打包变体返回 None（app.py 既有守卫惯例）。
 
@@ -6754,6 +6772,10 @@ class OverlayShell(QObject):
         target._profile_character = character_id
         old_lib = self.lib
         self.lib = new_lib
+        # 换库前先把本 sprite 从旧 clip 上摘下来（旧库随后的 shutdown 会销毁
+        # 它的 C++ 对象；留着引用则下个 tick 的 bind_clip 在 stop() 处抛异常，
+        # 换新 clip 的代码永远走不到 → 每 tick 刷 traceback、动画卡死）。
+        _detach_sprite_clip(self.sprite)
         self.sprite.library = new_lib
         self.host_for_sprite(self.sprite).behavior.forget(self.sprite)
         self._clear_menu_icon_cache()
@@ -6863,6 +6885,8 @@ class OverlayShell(QObject):
             self._sync_chat_surfaces(selected)
         else:
             self._spawned_libs[sprite] = new_lib
+        # 同主宠换库：先解绑旧 clip，再指向新库（旧库 shutdown 在后面）。
+        _detach_sprite_clip(sprite)
         sprite.library = new_lib
         sprite._profile_character = selected
         sprite_host.behavior.forget(sprite)

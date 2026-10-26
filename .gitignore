@@ -19,6 +19,17 @@ assets/prompt/
 # 帧序列化产物（B 档）：构建期/首跑生成的派生素材，单包 ~150MB 起，不入库
 assets/characters/*/frameseq/
 
+# 复用形象的目录联接（dafeiyu 借用 shenshen 的视频，只差人设；不入库避免 git 跟随链接重复收录 53MB）
+# 干净克隆后想用这个角色：把 assets/characters/shenshen/videos 联接过来即可
+#   cmd> mklink /J assets\characters\dafeiyu\videos assets\characters\shenshen\videos
+assets/characters/dafeiyu/videos
+
+# 本地语音识别模型（语音对话）：SenseVoice int8 229 MB + Silero VAD 629 KB + 词表。
+# **与第 7 节 rapidocr 模型口径不同**——那一批 31 MB 直接入库，这一批单个文件就超过
+# GitHub 的 100 MB 硬上限，入库会让 clone/push 直接失败。获取方式与来源见
+# THIRD_PARTY_NOTICES.md 第 10 节；构建期由 scripts/build_onedir.ps1 校验存在性。
+resources/asr_models/
+
 # 点击音效（内置合成 click.wav，随包分发；用户可自定义覆盖）
 !assets/sounds/
 !assets/sounds/**

@@ -445,6 +445,24 @@ _MUSIC_PLAYER_WARM_DELAY_MS = 2500
 _VISION_HOTKEY_ACTIONS = frozenset({"look_screen", "screen_capture"})
 
 
+def _chat_can_accept(widget) -> bool:
+    """这个控件此刻能不能收一句话（语音输入的发送落点判定）。
+
+    两个条件一起判：**可见**（用户现在就在看着它，投进去才有反馈）且**实现了
+    ``submit_text``**（旧变体/替身可能没有）。用 ``getattr`` 而非类型判断，
+    是为了让三个界面（modern / classic / 快速气泡）与测试替身都能走同一条路。
+    """
+    if widget is None:
+        return False
+    if not callable(getattr(widget, "submit_text", None)):
+        return False
+    try:
+        return bool(widget.isVisible())
+    except Exception:
+        # 已析构的 C++ 对象在这里抛 RuntimeError：当成"不能用"，不影响其他候选。
+        return False
+
+
 def _warm_music_player_paths() -> None:
     """后台线程暖音乐播放器路径缓存（幂等，可重复调用）。
 
@@ -2801,6 +2819,9 @@ class AppShell:
         手动视觉（看看屏幕 / 截图提问）模块停用：这两个动作**不注册**——``apply``
         是全量重设，从 bindings 里拿掉即顺带注销旧绑定，留着空转的键只会让用户
         按下去毫无反应。回调落点另有早退兜底（残留绑定/老菜单直达时不再采集）。
+
+        语音对话同理要看两个闸：语音模块停用时不注册（``_hotkey_voice_talk`` 里
+        另有早退）、无聊天变体也不注册（识别出来无处投递）。
         """
         service = getattr(self, "_hotkeys", None)
         if service is None or not getattr(service, "installed", False):
@@ -2808,18 +2829,31 @@ class AppShell:
         from .hotkeys import ACTIONS
 
         vision_active = feature_activation_mod.is_active("vision")
-        bindings = {
-            action: self.config.get(key) for action, key in ACTIONS.items()
-            if vision_active or action not in _VISION_HOTKEY_ACTIONS
-        }
+        # 绑定表只放**真的有值**的动作：``apply`` 自己会把空串跳过，但把 "" 留在表里
+        # 会让"这次要注册哪几个动作"这件事失真——测试替身缺键时还会塞进 None，
+        # 断言"视觉停用后只剩 open_chat"就变成"多一个空壳"。
+        bindings: dict[str, str] = {}
+        for action, key in ACTIONS.items():
+            if not vision_active and action in _VISION_HOTKEY_ACTIONS:
+                continue
+            text = self.config.get(key) or ""
+            if text:
+                bindings[action] = text
         callbacks = {
             "open_chat": self._hotkey_open_chat,
             "look_screen": self._hotkey_look_screen,
             "screen_capture": self._hotkey_screen_capture,
+            "voice_talk": self._hotkey_voice_talk,
         }
         if not vision_active:
             callbacks = {a: cb for a, cb in callbacks.items()
                          if a not in _VISION_HOTKEY_ACTIONS}
+        # 无聊天变体（--no-chat 打包）里语音对话无处投递：识别出来也送不出去，
+        # 注册它只会让用户"说完没反应"。与 vision 同口径——不注册，而不是注册了
+        # 再在回调里早退（用户看不见区别，但按键表里少一条空转项）。
+        if not bool(getattr(self, "enable_chat", True)):
+            bindings.pop("voice_talk", None)
+            callbacks.pop("voice_talk", None)
         try:
             failures = service.apply(bindings, callbacks)
         except Exception:
@@ -2870,6 +2904,154 @@ class AppShell:
         legacy = getattr(getattr(self.instance, "win", None), "on_screen_capture", None)
         if callable(legacy):
             legacy()
+
+    # ------------------------------------------------- 语音对话（按下说话）
+    def _hotkey_voice_talk(self) -> None:
+        """语音对话热键：按一下开始、静音自动收尾；录音中再按立刻收尾。
+
+        三段分支全在 :class:`~pet.voice_talk.VoiceTalkController.toggle` 里（含
+        "朗读中先掐声音"），这里只做模块闸与懒创建——时序不该散落在 app.py。
+        """
+        if not feature_activation_mod.is_active("voice"):
+            return
+        controller = self._ensure_voice_talk()
+        if controller is None:
+            return
+        controller.toggle()
+
+    def _ensure_voice_talk(self):
+        """懒创建语音对话控制器（第一次真按下热键时才建）。
+
+        懒创建不是优化洁癖：控制器一起来就带着录音器与识别器（模型 229 MB，
+        首次识别才加载）。绑了键但从不按的用户，不该为它付任何启动代价。
+        """
+        existing = getattr(self, "_voice_talk", None)
+        if existing is not None:
+            return existing
+        try:
+            from .voice_talk import VoiceTalkController
+
+            controller = VoiceTalkController(self, self.config)
+            # 录音/识别期间给一句气泡反馈。没有它用户按完键什么都看不见，
+            # 只能靠"说话有没有反应"猜——而且不知道该不该停口。
+            controller.status_changed.connect(self._on_voice_talk_status)
+            self._voice_talk = controller
+            return controller
+        except Exception:
+            logging.exception("创建语音对话控制器失败（语音输入不可用）")
+            return None
+
+    def _on_voice_talk_status(self, state: str) -> None:
+        """语音对话的状态气泡（``listening`` / ``thinking`` / 空=回空闲）。"""
+        if state == "listening":
+            self.voice_talk_notice("我在听…（说完停顿一下就会发出去）")
+        elif state == "thinking":
+            self.voice_talk_notice("正在识别…")
+
+    def voice_talk_interrupt(self) -> None:
+        """语音输入要开始录音：先把正在播放的声音掐掉。
+
+        **必须两处都掐**，它们管的是不同东西：朗读器持有"还没送出去的句子"
+        （``interrupt`` 只清队列、保留订阅），音频通道持有"正在出声这一段"+
+        "已发出但没起播的"（``interrupt_speech``）。只掐一处就会漏音——而漏出来
+        的正是她自己的声音，会被麦克风录进去再识别一遍。
+        """
+        reader = getattr(self, "chat_reply_reader", None)
+        if reader is not None:
+            interrupt = getattr(reader, "interrupt", None)
+            if callable(interrupt):
+                try:
+                    interrupt()
+                except Exception:
+                    logging.exception("打断助手回复朗读失败（继续录音）")
+        channel = getattr(self, "voice_chime_service", None)
+        if channel is not None:
+            interrupt = getattr(channel, "interrupt_speech", None)
+            if callable(interrupt):
+                try:
+                    interrupt()
+                except Exception:
+                    logging.exception("打断语音播报失败（继续录音）")
+
+    def voice_talk_deliver(self, text: str) -> bool:
+        """把识别出的文字送进当前对话界面并发送（语音输入的终点）。"""
+        target = self._voice_chat_target()
+        if target is not None:
+            return bool(target.submit_text(text))
+        # 没有任何可见的对话界面：打开最轻的那个（快速对话气泡），等它出来再投递。
+        # 这里必须延迟——open_quick_chat 内部本身就经 singleShot 落到事件循环里，
+        # 同步投递会撞上一个还没 show 出来的控件。
+        self._open_quick_chat_for_voice()
+        QTimer.singleShot(180, lambda: self._deliver_to_chat_later(text, 0))
+        return True
+
+    def voice_talk_notice(self, text: str) -> None:
+        """语音对话的状态提示：走桌宠气泡（不弹窗、不抢焦点）。"""
+        win = getattr(getattr(self, "instance", None), "win", None)
+        bubble = getattr(win, "show_bubble", None) if win is not None else None
+        if callable(bubble):
+            try:
+                bubble(text)
+                return
+            except Exception:
+                logging.exception("语音对话气泡提示失败")
+        logging.info("语音对话：%s", text)
+
+    def _deliver_to_chat_later(self, text: str, attempt: int) -> None:
+        """打开界面后投递：等它真的可见（最多重试三次）。
+
+        「打开」与「可见」在 Qt 里不是同一拍（overlay 拓扑要走 sprite 锚定、
+        主窗口拓扑要把窗口摆到位）。三次仍不可见就放弃并留一条 warning ——
+        宁可让用户重说一遍，也不要往一个不存在的东西里塞字。
+        """
+        target = self._voice_chat_target()
+        if target is not None:
+            target.submit_text(text)
+            return
+        if attempt < 3:
+            QTimer.singleShot(150, lambda: self._deliver_to_chat_later(text, attempt + 1))
+            return
+        logging.warning("语音对话：没有可用的对话界面，本次识别结果未送出：%s",
+                        text[:20])
+
+    def _voice_chat_target(self):
+        """找当前**可见且能接收一句话**的对话界面；没有返回 ``None``。
+
+        优先级：完整聊天窗（用户本来就在对话里）> 快速对话气泡。气泡要查两处
+        ——主窗口拓扑挂在 ``instance.quick_chat``，overlay 拓扑挂在
+        ``overlay_shell._quick_chat``，两者互斥存在。
+        """
+        instance = getattr(self, "instance", None)
+        if instance is None:
+            return None
+        for attr in ("modern_chat_window", "legacy_chat_window"):
+            window = getattr(instance, attr, None)
+            if _chat_can_accept(window):
+                return window
+        for holder in (instance, self._hotkey_overlay()):
+            if holder is None:
+                continue
+            bubble = getattr(holder, "quick_chat", None) or getattr(holder, "_quick_chat", None)
+            if _chat_can_accept(bubble):
+                return bubble
+        return None
+
+    def _open_quick_chat_for_voice(self) -> None:
+        """语音输入时没有任何对话界面：打开快速对话（最轻、锚在桌宠上）。"""
+        opener = getattr(getattr(self, "instance", None), "open_quick_chat", None)
+        if callable(opener):
+            try:
+                opener()
+                return
+            except Exception:
+                logging.exception("打开快速对话失败（改走 overlay 路径）")
+        overlay = self._hotkey_overlay()
+        fallback = getattr(overlay, "open_quick_chat", None) if overlay is not None else None
+        if callable(fallback):
+            try:
+                fallback()
+            except Exception:
+                logging.exception("overlay 打开快速对话失败")
 
     def _install_session_watcher(self) -> None:
         """安装会话结束探测器（幂等；实例属性强引用保活，不跨实例共享）。"""
@@ -3280,6 +3462,14 @@ class AppShell:
                 hotkeys.uninstall()
             except Exception:
                 logging.debug("注销全局快捷键失败", exc_info=True)
+        # 语音对话：停止录音并作废在飞的识别线程（daemon，但要让它的回调在对象
+        # 析构前自行放弃，否则会往一个已死的宿主里塞文字）。
+        voice_talk = getattr(self, "_voice_talk", None)
+        if voice_talk is not None:
+            try:
+                voice_talk.shutdown()
+            except Exception:
+                logging.debug("退出时停止语音对话失败", exc_info=True)
         if self._shared is not None:
             try:
                 self._shared.stop_all()

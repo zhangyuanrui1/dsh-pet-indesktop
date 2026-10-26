@@ -2256,6 +2256,36 @@ class ChatWindow(QDialog):
         self._last_user_text = request_text
         self._begin_generation(request_text, image_payloads=image_payloads)
 
+    def submit_text(self, text: str) -> bool:
+        """外部投递一句话并直接发送（语音输入用）。返回是否接受了这句话。
+
+        **刻意不另写一条发送路径**：走 ``send_message`` 的完整链路，语音输入才会
+        与打字完全同构（「记住：」指令照样生效、附件校验照样生效、生成中照样先
+        打断）。任何"语音专用捷径"最后都会变成"说出来和打出来结果不一样"。
+
+        生成中不硬发：``service.busy`` 判的是 worker 线程是否还在跑，而 ``stop()``
+        只是置取消标志、线程要一小会儿才退。此时直接调 ``send_message`` 会撞上它
+        自己的「生成中就只 stop 并 return」分支——识别结果被无声吃掉。所以等线程
+        退干净再发（最多三次重试）；仍不退就把文字留在输入框，让用户按一下，
+        宁可多一步也不能吞掉他刚说的话。
+        """
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return False
+        self._submit_when_idle(cleaned, 0)
+        return True
+
+    def _submit_when_idle(self, text: str, attempt: int) -> None:
+        if self.service.busy:
+            self.service.stop()
+            if attempt < 3:
+                QTimer.singleShot(120, lambda: self._submit_when_idle(text, attempt + 1))
+                return
+            self.input.setPlainText(text)
+            return
+        self.input.setPlainText(text)
+        self.send_message()
+
     def _chat_memory(self) -> ChatMemory:
         """当前角色的对话全局记忆（与会话文件同目录；按需构造——实例很轻，锁按路径共享）。"""
         return ChatMemory(self.store.root / self.character_id / "memory.json")

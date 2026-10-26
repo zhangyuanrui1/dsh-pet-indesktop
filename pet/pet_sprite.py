@@ -784,6 +784,32 @@ class PetSprite(QObject):
         """与 _begin_throw_rotation 配对出栈（同一角度，paint 内不会中途变化）。"""
         end_rotation(painter, angle_deg)
 
+    def detach_clip(self) -> None:
+        """解绑当前 clip（换素材库前用）：断开信号 + 停解码 + 清引用。
+
+        与 ``close()`` 的区别是**不动 sprite 自身回调**（``_dirty_cb`` /
+        ``_kinetic_cb`` / ``_clip_finished_cb`` 等）：换库后这只 sprite 仍在
+        同一个壳里继续跑，只是换了批素材，回调断了就再也没人驱动重绘与续圈。
+
+        调用时机是硬约束：**必须在旧库 ``shutdown()`` 之前**。库收尾会连带
+        销毁 clip 的 C++ 对象（含它的 QTimer），此后任何 ``stop()`` 都抛
+        ``Internal C++ object already deleted``；而 ``bind_clip`` 的 stop 在
+        换新 clip 之前，异常会让 sprite 永久停在死 clip 上——每个 tick 刷一次
+        traceback，动画彻底不动（实测：新角色 + 子宠换角色必现）。
+        """
+        clip = self._clip
+        self._clip = None
+        self._clip_name = None
+        if clip is None:
+            return
+        self._disconnect_clip_signals(clip)
+        stop = getattr(clip, "stop", None)
+        if callable(stop):
+            try:
+                stop()
+            except RuntimeError:
+                pass  # C++ 侧已销毁（库先一步收尾）：没有可停的东西
+
     def close(self) -> None:
         """释放 clip 所有权（V-8）：断开信号 + 停解码 + 清帧缓存。
 
@@ -791,14 +817,7 @@ class PetSprite(QObject):
         即停解码，不再靠库 shutdown() 兜底。屏迁移等需要保留 clip 的
         场景走 remove_sprite(release_clip=False)。
         """
-        clip = self._clip
-        if clip is not None:
-            self._disconnect_clip_signals(clip)
-            stop = getattr(clip, "stop", None)
-            if callable(stop):
-                stop()
-        self._clip = None
-        self._clip_name = None
+        self.detach_clip()
         self._frame_sig = None
         self._pixmap = None
         self._hit_image = None
@@ -837,10 +856,9 @@ class PetSprite(QObject):
         overlay 持有（同线程），直接连接即可，无需 queued。
         """
         if self._clip is not None:
-            self._disconnect_clip_signals(self._clip)
-            stop = getattr(self._clip, "stop", None)
-            if callable(stop):
-                stop()
+            # 统一走 detach_clip：它还兜住「clip 的 C++ 对象已被库收尾销毁」这种
+            # 情况（裸调 stop() 会抛 RuntimeError，把换新 clip 的代码挡在后面）。
+            self.detach_clip()
         # 播放边界：此刻旧 clip 已 stop() 并断开信号 → 允许换后端（帧序列变可用）。
         # **取不到 clip 不能把异常抛进 Qt 槽**：菜单/快捷键是外部触发，槽里抛
         # KeyError 会被事件循环吞掉只留 traceback，用户看到的是"点了没反应"。

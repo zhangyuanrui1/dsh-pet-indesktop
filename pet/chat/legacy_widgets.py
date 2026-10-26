@@ -1064,6 +1064,30 @@ class ChatWindow(QDialog):
         self._last_user_text = text
         self._begin_generation(text)
 
+    def submit_text(self, text: str) -> bool:
+        """外部投递一句话并直接发送（语音输入用）。语义与 modern 窗同。
+
+        经 ``send_message`` 走完整链路，不另开捷径；生成中等 worker 退干净再发，
+        三次仍忙就把文字留在输入框（细节与理由见 ``chat/widgets.py::submit_text``
+        ——两处必须同口径，否则经典界面上语音输入的行为会和现代界面不一样）。
+        """
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return False
+        self._submit_when_idle(cleaned, 0)
+        return True
+
+    def _submit_when_idle(self, text: str, attempt: int) -> None:
+        if self.service.busy:
+            self.service.stop()
+            if attempt < 3:
+                QTimer.singleShot(120, lambda: self._submit_when_idle(text, attempt + 1))
+                return
+            self.input.setPlainText(text)
+            return
+        self.input.setPlainText(text)
+        self.send_message()
+
     def _chat_memory(self) -> ChatMemory:
         """当前角色的对话全局记忆（与会话文件同目录；按需构造——实例很轻，锁按路径共享）。"""
         return ChatMemory(self.store.root / self.character_id / "memory.json")

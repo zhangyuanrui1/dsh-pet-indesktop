@@ -32,6 +32,9 @@ _ACTION_HINTS = {
     "open_chat": "在任意程序前台时按这个组合键，直接打开 AI 对话窗口。",
     "look_screen": "按一下就让它看一眼当前屏幕并说说看到了什么。",
     "screen_capture": "按一下进入截图提问（框选区域后发给模型）。",
+    # 语音对话的两种收尾都要写清楚，否则用户会以为"按住不放"或"要再按一次"是唯一方式。
+    "voice_talk": "按一下开始说话，说完停顿 1 秒自动发出；录音中再按一次可立刻结束。"
+                  "识别在本机完成，语音不上传。",
 }
 
 #: 占用说明（只在支持全局热键的平台上拼进 hint）。
@@ -234,7 +237,7 @@ _UNSUPPORTED_HINT = "（当前系统不支持系统级快捷键：这里可以�
 
 
 def build_hotkey_rows(dialog) -> list[SettingRow]:
-    """「互动 · 快捷键」一节的行装配（三项）。"""
+    """「互动 · 快捷键」一节的行装配（按 ``ACTIONS`` 逐项生成，当前四项）。"""
     create_hotkey_controls(dialog)
     supported = is_supported()
     rows = []
@@ -252,7 +255,7 @@ def build_hotkey_rows(dialog) -> list[SettingRow]:
 
 
 def save_hotkey_settings(dialog) -> None:
-    """写回三个配置键（空串 = 不绑）。真正注册由主进程侧的热键服务负责。"""
+    """写回各动作的配置键（空串 = 不绑）。真正注册由主进程侧的热键服务负责。"""
     values = getattr(dialog, "_hotkey_values", None) or {}
     for action, key in ACTIONS.items():
         text = hotkey_spec.normalize(values.get(action, ""))
