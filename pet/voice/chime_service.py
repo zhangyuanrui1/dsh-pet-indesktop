@@ -531,6 +531,8 @@ class VoiceChimeService:
         self._bridge: _AudioBridge | None = None
         self._player = None
         self._audio_out = None
+        # 播放器当前绑定的输出设备名（耳机插拔后要跟着换，见 _sync_output_device）
+        self._out_device_name = ""
         # 合成在飞时被 busy 门拦下的待补播报（_fire 排队，_on_synthesized 补播）
         self._queued_fire: tuple | None = None
         self._timer = QTimer()
@@ -1271,6 +1273,7 @@ class VoiceChimeService:
         if not self._ensure_player():
             self._bubble(f"播放器不可用，音频已缓存：{Path(path).name}")
             return
+        self._sync_output_device()
         try:
             from PySide6.QtCore import QUrl
 
@@ -1298,6 +1301,7 @@ class VoiceChimeService:
         if not self._ensure_player():
             logger.warning("播放器不可用，外部播报跳过播放：%s", Path(path).name)
             return False
+        self._sync_output_device()
         try:
             from PySide6.QtCore import QUrl
 
@@ -1479,6 +1483,40 @@ class VoiceChimeService:
             return
         self._fire(pending, datetime.now(), None, show_bubble=False, role="speak",
                    respect_quiet=respect_quiet)
+
+    def _sync_output_device(self) -> None:
+        """起播前把输出设备对齐到系统**当前**的默认设备（耳机插拔要跟得上）。
+
+        ``QAudioOutput()`` 不带参数时绑的是**创建那一刻**的默认设备，之后系统换
+        了默认设备（拔掉耳机、插上耳机、连上蓝牙音箱）它不会自己跟着换——症状
+        就是「拔了耳机就听不见」「插上耳机声音还是从电脑喇叭出来」。所以每次
+        起播前问一次，变了就切过去。
+
+        **正在播的时候不切**：换设备会打断当前这一句，等下一句再生效即可。
+        拿不到设备信息时静默沿用原设备（宁可用旧的出声，也不要不出声）。
+        """
+        if self._audio_out is None:
+            return
+        try:
+            from PySide6.QtMultimedia import QMediaDevices
+
+            dev = QMediaDevices().defaultAudioOutput()
+        except Exception:
+            logger.debug("查询默认输出设备失败（沿用当前设备）", exc_info=True)
+            return
+        try:
+            if dev is None or dev.isNull():
+                return
+            name = dev.description()
+            if not name or name == self._out_device_name:
+                return
+            if self._player_playing():
+                return
+            self._audio_out.setDevice(dev)
+            self._out_device_name = name
+            logger.info("语音输出设备切换为：%s", name)
+        except Exception:
+            logger.debug("切换输出设备失败（沿用当前设备）", exc_info=True)
 
     def _ensure_player(self) -> bool:
         if self._player is not None:
