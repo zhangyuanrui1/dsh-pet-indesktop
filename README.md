@@ -307,7 +307,8 @@ python scripts/cleanup_mei_cache.py --delete
   - 识别完全在**本机**完成（SenseVoice，ONNX Runtime），语音不上传、断网可用；
     首次识别要加载模型约 1 秒，之后每句 0.2~1.8 秒（取决于 CPU）。
   - 识别模型（229 MB）放 `resources/asr_models/`，**不入库**（超过仓库单文件上限）：
-    干净克隆后按 [第三方声明第 10 节](THIRD_PARTY_NOTICES.md) 的说明下载补齐；
+    干净克隆后跑一次 `python scripts/fetch_asr_models.py` 自动补齐
+    （走镜像下载 155 MB 压缩包 + 629 KB 断句模型，逐文件按 sha256 校验，断线可续传）；
     缺文件时语音入口会提示缺哪个、该放哪里，其它功能不受影响。
   - 当下没有打开任何对话界面时会自动弹出快速对话气泡；说完直接就是一轮对话。
   - 没检测到说话、或没识别出文字时，只在气泡上提示一句，不会自己重试。

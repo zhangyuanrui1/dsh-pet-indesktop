@@ -85,8 +85,11 @@ def availability(directory: Path | None = None) -> tuple[bool, str]:
     target = Path(directory) if directory is not None else model_dir()
     gaps = missing_files(target)
     if gaps:
+        # 提示里带上下载命令：模型 229 MB 不入库，干净克隆后这里一定为空，
+        # 只说"请放到某目录"等于让用户自己去找一个 229 MB 的文件。
         return False, ("语音识别模型未就绪（缺 " + "、".join(gaps)
-                       + f"）：请放到 {target}")
+                       + f"）：在仓库根目录运行 python scripts/fetch_asr_models.py"
+                       f" 自动下载，或手动放到 {target}")
     return True, ""
 
 
