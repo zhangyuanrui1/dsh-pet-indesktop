@@ -77,7 +77,6 @@ def test_default_chime_config_has_all_flat_keys():
         "voice_chime_sapi_voice",
         "voice_chime_doubao_pitch",
         "voice_chime_doubao_speaker",
-        "voice_chime_bailian_voice",
         "voice_chime_bailian_instruct",
         "voice_chime_bailian_model",
         "voice_chime_bailian_rate",

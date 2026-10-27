@@ -1,17 +1,22 @@
 # -*- coding: utf-8 -*-
-"""阿里云百炼 CosyVoice provider —— 童声「龙呼呼」等系统音色 + Instruct 情绪控制。
+"""阿里云百炼 CosyVoice provider —— 童声「龙呼呼」+ Instruct 情绪控制。
 
 **为什么加它**（2026-10-26 机主需求）：Edge / 豆包的中文音色都不是想要的甜娃童声；
-百炼 CosyVoice 的系统音色里有 ``longhuhu_v3``（龙呼呼，6~10 岁天真烂漫女童），
-是同类里最接近「小女童讲话」的官方音色，且支持 Instruct 情绪指令，不用本地部署、
-不用克隆参考音频——本机无独显，本地 CosyVoice2 纯 CPU 推理每句要十几秒，不可用。
+百炼 CosyVoice 的系统音色里有龙呼呼（6~10 岁天真烂漫女童），是同类里最接近
+「小女童讲话」的官方音色，且支持 Instruct 情绪指令，不用本地部署、不用克隆参考
+音频——本机无独显，本地 CosyVoice2 纯 CPU 推理每句要十几秒，不可用。
+
+**只保留两个模型**（2026-10-27 机主按官方《CosyVoice 音色列表》核对）：龙呼呼这一
+副嗓子只有 ``cosyvoice-v3-flash`` 与 ``cosyvoice-v2`` 提供，且两代音色 ID 不同
+（v3 代带 ``_v3`` 后缀）——所以音色不再是可选项，而是**由模型推导**，避免选出一个
+模型没有的音色，请求直接被服务端驳回。
 
 接口（2026-10-26 按官方《非实时语音合成 CosyVoice HTTP API》实现）：
 
 ```
 POST https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer
 Authorization: Bearer <API Key，存系统钥匙串>
-body: {"model": "cosyvoice-v2",
+body: {"model": "cosyvoice-v3-flash",
        "input": {"text": ..., "voice": "longhuhu_v3",
                  "format": "mp3", "sample_rate": 24000,
                  "instruction": "你说话的情感是 happy。"}}
@@ -45,46 +50,33 @@ MISSING_MESSAGE = (
     "里创建，填进设置页即可（只存系统钥匙串，不写进配置文件）。"
 )
 TIMEOUT_S = 60
-DEFAULT_MODEL = "cosyvoice-v3.5-flash"
-DEFAULT_VOICE = "longhuhu"
+DEFAULT_MODEL = "cosyvoice-v3-flash"
 SAMPLE_RATE = 24000
 #: 语速用整数百分比配置（共享的 number 控件只吃整数），发请求换算成官方的倍数。
 #: 100 = 正常（对应 API 的 rate=1.0），50~200 对齐官方取值 [0.5, 2.0]。
 DEFAULT_RATE_PERCENT = 100
 
-#: 模型。**音色 ID 分两代，不能混用**（官方口径：一个模型的音色不能给另一个模型用）：
-#: - v3.5 系（v3.5-flash / v3.5-plus）：音色不带 _v3 后缀（龙呼呼=``longhuhu``），
-#:   **不支持 Instruct 指令**，价格更低（v3.5-flash 0.8 元/万字符）；
-#: - v2 / v3 系：音色带 _v3 后缀（龙呼呼=``longhuhu_v3``），支持 Instruct。
-#: 默认 v3.5-flash——2026-10-26 机主账号开通的免费额度只有 v3.5 系两款。
-MODEL_OPTIONS = (
-    ("cosyvoice-v3.5-flash", "cosyvoice-v3.5-flash（默认，便宜）"),
-    ("cosyvoice-v3.5-plus", "cosyvoice-v3.5-plus（质量更高）"),
-    ("cosyvoice-v2", "cosyvoice-v2（支持情绪指令）"),
-    ("cosyvoice-v3-flash", "cosyvoice-v3-flash（支持情绪指令）"),
-    ("cosyvoice-v3-plus", "cosyvoice-v3-plus（支持情绪指令，更贵）"),
+#: 模型 → 音色 ID。**音色 ID 与模型代际绑定，不能混用**（一个模型的音色不能给
+#: 另一个模型用，选错服务端直接报「音色不存在」）：
+#: - ``cosyvoice-v3-flash`` → ``longhuhu_v3``（v3 代命名，带 _v3 后缀）
+#: - ``cosyvoice-v2`` → ``longhuhu``（v2 代命名，不带后缀）
+#: 龙呼呼只有这两个模型提供（2026-10-27 机主核对官方音色列表），所以**音色不是
+#: 可选项而是推导项**：下拉里只剩这两个模型，改模型音色 ID 自动跟着换。
+MODEL_VOICE = (
+    ("cosyvoice-v3-flash", "longhuhu_v3"),
+    ("cosyvoice-v2", "longhuhu"),
 )
+DEFAULT_VOICE = dict(MODEL_VOICE)[DEFAULT_MODEL]
+_MODEL_IDS = tuple(model for model, _voice in MODEL_VOICE)
 
-#: 系统音色（名称/参数取自官方《CosyVoice 音色列表》）。同一副嗓子两代各有 ID：
-#: 不带后缀的给 v3.5 系模型用，带 ``_v3`` 的给 v2/v3 系模型用——选错模型会报
-#: 音色不存在，这里把两代都列出来并在标签里标明代际。
-VOICE_OPTIONS = (
-    ("longhuhu", "龙呼呼·女童（v3.5 模型用）"),
-    ("longhuhu_v3", "龙呼呼·女童（v2/v3 模型用）"),
-    ("longpaopao", "龙泡泡·飞天泡泡音（v3.5 模型用）"),
-    ("longpaopao_v3", "龙泡泡·飞天泡泡音（v2/v3 模型用）"),
-    ("longjielidou_v3", "龙杰力豆·阳光顽皮男（v2/v3 模型用）"),
-    ("longshanshan", "龙闪闪·戏剧化童声（v3.5 模型用）"),
-    ("longshanshan_v3", "龙闪闪·戏剧化童声（v2/v3 模型用）"),
-    ("longniuniu", "龙牛牛·阳光男童声（v3.5 模型用）"),
-    ("longniuniu_v3", "龙牛牛·阳光男童声（v2/v3 模型用）"),
-    ("longanyang", "龙安洋·阳光大男孩（全模型）"),
-    ("longanhuan", "龙安欢·欢脱元气女（全模型）"),
+MODEL_OPTIONS = (
+    ("cosyvoice-v3-flash", "cosyvoice-v3-flash · 龙呼呼（默认）"),
+    ("cosyvoice-v2", "cosyvoice-v2 · 龙呼呼（上一代，音色略有差异）"),
 )
 
 #: Instruct 预设（``none`` 表示不发 instruction）。格式必须严格照官方要求：
 #: 「你说话的情感是 X。」／「你说话的角色是 Y，你说话的情感是 X。」，结尾句号不能省。
-#: **只有 v2/v3 系音色支持**；v3.5 系模型会被自动忽略（见 ``_effective_instruct``）。
+#: 保留下来的两个模型都支持 Instruct（v3.5 系不支持，但已不在选项里）。
 INSTRUCT_OPTIONS = (
     ("", "默认（不指定情绪）"),
     ("你说话的情感是 neutral。", "平静 neutral"),
@@ -107,13 +99,8 @@ class BailianTtsProvider(TtsProvider):
     unavailable_message = MISSING_MESSAGE
     fields = (
         TtsField(
-            "voice", "voice_chime_bailian_voice", "音色",
-            "童声首选龙呼呼；官方音色名可手填。",
-            kind="select", default=DEFAULT_VOICE, options=VOICE_OPTIONS, allow_custom=True,
-        ),
-        TtsField(
             "instruct", "voice_chime_bailian_instruct", "情绪 / 角色",
-            "换情绪/角色；v3.5 模型不支持。",
+            "换情绪，留空即默认。",
             kind="select", default="", options=INSTRUCT_OPTIONS, allow_custom=True,
         ),
         TtsField(
@@ -123,9 +110,9 @@ class BailianTtsProvider(TtsProvider):
         ),
         TtsField(
             "model", "voice_chime_bailian_model", "模型",
-            "换模型要配对的音色。",
+            "换模型音色自动跟着换。",
             kind="select", default=DEFAULT_MODEL, options=MODEL_OPTIONS,
-            allow_custom=True, advanced=True,
+            allow_custom=False, advanced=True,
         ),
         TtsField(
             "api_key", "voice_chime_bailian_api_key", "API Key",
@@ -140,22 +127,22 @@ class BailianTtsProvider(TtsProvider):
         return {
             "provider": self.id,
             "api_key": str(values.get("api_key") or "").strip(),
-            "voice": clean_voice(values.get("voice")),
-            "instruct": _effective_instruct(model, values.get("instruct")),
+            "voice": voice_for(model),
+            "instruct": clean_instruct(values.get("instruct")),
             "rate": clean_rate(values.get("rate")),
             "model": model,
             "ext": "mp3",
         }
 
     def flavor(self, values: dict) -> str:
-        # 只放影响音频内容的参数（密钥不进缓存键）；与 plan() 同口径——v3.5 系
-        # 不吃 instruct，参数不同也是同一段音频，缓存键必须一致
+        # 只放影响音频内容的参数（密钥不进缓存键）；音色由模型推导，所以只放推导
+        # 结果——配置里那个已经作废的 voice 值不该影响缓存命中
         model = clean_model(values.get("model"))
         return "|".join((
             self.id,
             model,
-            clean_voice(values.get("voice")),
-            _effective_instruct(model, values.get("instruct")),
+            voice_for(model),
+            clean_instruct(values.get("instruct")),
             f"rate={clean_rate(values.get('rate')):.2f}",
         ))
 
@@ -199,14 +186,19 @@ class BailianTtsProvider(TtsProvider):
 
 
 # ---------------------------------------------------------------- 清洗
-def clean_voice(value) -> str:
-    text = str(value or "").strip()
-    return text[:64] if text else DEFAULT_VOICE
-
-
 def clean_model(value) -> str:
-    text = str(value or "").strip()
-    return text[:64] if text else DEFAULT_MODEL
+    """模型归一：只认龙呼呼可用的两款，其余（含已下线的 v3.5 系）一律回落默认。
+
+    回落而不是报错，是因为历史配置里可能还写着 ``cosyvoice-v3.5-flash``——那个
+    模型没有龙呼呼音色（音色 ID 也不同），留着只会让每句话都合成失败。
+    """
+    text = str(value or "").strip().lower()
+    return text if text in _MODEL_IDS else DEFAULT_MODEL
+
+
+def voice_for(model) -> str:
+    """按模型推导音色 ID——音色不可单独选，避免出「模型没有这个音色」的组合。"""
+    return dict(MODEL_VOICE)[clean_model(model)]
 
 
 def clean_instruct(value) -> str:
@@ -227,13 +219,6 @@ def clean_rate(value) -> float:
     if raw <= 10:  # 已经是倍数口径
         raw *= 100
     return max(0.5, min(2.0, raw / 100.0))
-
-
-def _effective_instruct(model: str, value) -> str:
-    """v3.5 系模型不吃 Instruct 指令——直接丢弃，别发给服务端（发了可能报错）。"""
-    if str(model or "").strip().startswith("cosyvoice-v3.5"):
-        return ""
-    return clean_instruct(value)
 
 
 # ---------------------------------------------------------------- HTTP

@@ -1330,12 +1330,12 @@ class Config:
             "voice_chime_sapi_rate": 0,  # SAPI5 语速 −10..10（0 为系统默认）
             "voice_chime_doubao_speaker": "zh_female_peiqi_uranus_bigtts",  # 豆包 2.0 音色
             "voice_chime_doubao_pitch": 15,  # 豆包本地变调百分比（0–30）
-            # 阿里云百炼 CosyVoice：系统音色（含童声「龙呼呼」）走云端合成，API Key
-            # 只存系统钥匙串。默认 v3.5-flash + longhuhu（2026-10-26 机主账号免费
-            # 额度只有 v3.5 系两款；v3.5 音色 ID 不带 _v3 后缀，且不支持 Instruct）。
-            "voice_chime_bailian_voice": "longhuhu",  # 音色参数名
-            "voice_chime_bailian_instruct": "",  # Instruct 情绪/角色指令（仅 v2/v3 模型有效）
-            "voice_chime_bailian_model": "cosyvoice-v3.5-flash",  # 与音色配套的模型
+            # 阿里云百炼 CosyVoice：童声「龙呼呼」走云端合成，API Key 只存系统钥匙串。
+            # 龙呼呼只有 cosyvoice-v3-flash（音色 longhuhu_v3）与 cosyvoice-v2
+            # （音色 longhuhu）两款模型提供（2026-10-27 按官方音色列表核对），音色 ID
+            # 由模型推导（见 pet/tts/bailian.py 的 MODEL_VOICE），所以没有独立的音色键。
+            "voice_chime_bailian_instruct": "",  # Instruct 情绪/角色指令（两个模型都支持）
+            "voice_chime_bailian_model": "cosyvoice-v3-flash",  # 龙呼呼可用的模型
             "voice_chime_bailian_rate": 100,  # 语速百分比 50~200（100 = 正常，换算成 API 的 rate 倍数）
             # 节日提醒（农历/24 节气/西方节日；命中当日用气泡告知并附氛围匹配文案）。
             # 总开关默认关闭：属"主动打扰"型功能，升级后不应突然冒出来，由用户显式开启。
@@ -1637,7 +1637,6 @@ class Config:
             "voice_chime_sapi_rate",
             "voice_chime_doubao_speaker",
             "voice_chime_doubao_pitch",
-            "voice_chime_bailian_voice",
             "voice_chime_bailian_instruct",
             "voice_chime_bailian_model",
             "voice_chime_bailian_rate",

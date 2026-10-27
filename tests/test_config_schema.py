@@ -175,7 +175,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "voice_chime_custom_times",
         "voice_chime_bailian_instruct",
         "voice_chime_bailian_model",
-        "voice_chime_bailian_voice",
+        "voice_chime_bailian_rate",
         "voice_chime_doubao_pitch",
         "voice_chime_doubao_speaker",
         "voice_chime_enabled",

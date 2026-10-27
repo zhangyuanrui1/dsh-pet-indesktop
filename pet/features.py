@@ -260,7 +260,6 @@ FEATURES: dict[str, FeatureSpec] = {
             "voice_chime_sapi_rate",
             "voice_chime_doubao_speaker",
             "voice_chime_doubao_pitch",
-            "voice_chime_bailian_voice",
             "voice_chime_bailian_instruct",
             "voice_chime_bailian_model",
             "self_talk_speak_enabled",

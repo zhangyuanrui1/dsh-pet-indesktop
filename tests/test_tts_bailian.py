@@ -25,19 +25,64 @@ def test_provider_contract_basics() -> None:
 
 
 def test_flavor_carries_content_params_only() -> None:
-    values = {"voice": "longhuhu_v3", "instruct": "你说话的情感是 happy。",
+    values = {"instruct": "你说话的情感是 happy。",
               "model": "cosyvoice-v2", "api_key": "sk-secret"}
     flavor = bailian.PROVIDER.flavor(values)
-    assert "longhuhu_v3" in flavor and "happy" in flavor and "cosyvoice-v2" in flavor
+    # v2 的龙呼呼是 longhuhu（不带 _v3），音色由模型推导
+    assert "longhuhu" in flavor and "happy" in flavor and "cosyvoice-v2" in flavor
     assert "sk-secret" not in flavor, "凭据绝不许进缓存键（flavor）"
 
 
 def test_plan_defaults_to_mp3_and_longhuhu() -> None:
     plan = bailian.PROVIDER.plan({"api_key": "sk-x"})
     assert plan["ext"] == "mp3"
-    assert plan["voice"] == bailian.DEFAULT_VOICE == "longhuhu"
-    assert plan["model"] == bailian.DEFAULT_MODEL
+    assert plan["model"] == bailian.DEFAULT_MODEL == "cosyvoice-v3-flash"
+    assert plan["voice"] == bailian.DEFAULT_VOICE == "longhuhu_v3"
     assert plan["instruct"] == ""
+
+
+def test_only_longhuhu_models_are_offered() -> None:
+    """龙呼呼只有这两款模型提供（2026-10-27 官方音色列表核对），下拉里别再多给。"""
+    offered = [value for value, _label in bailian.MODEL_OPTIONS]
+    assert offered == ["cosyvoice-v3-flash", "cosyvoice-v2"]
+    assert dict(bailian.MODEL_VOICE) == {
+        "cosyvoice-v3-flash": "longhuhu_v3",
+        "cosyvoice-v2": "longhuhu",
+    }
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("cosyvoice-v3-flash", "longhuhu_v3"),
+        ("cosyvoice-v2", "longhuhu"),
+        ("  CosyVoice-V2  ", "longhuhu"),  # 大小写/空白都归一
+    ],
+)
+def test_voice_is_derived_from_model(model, expected) -> None:
+    """音色 ID 不能手选：给了模型就推导出对应那一代的龙呼呼。"""
+    assert bailian.PROVIDER.plan({"api_key": "sk-x", "model": model})["voice"] == expected
+
+
+def test_stale_voice_value_does_not_win() -> None:
+    """历史配置里存着不匹配的音色 ID 时以模型为准（否则服务端报音色不存在）。"""
+    plan = bailian.PROVIDER.plan({
+        "api_key": "sk-x", "model": "cosyvoice-v2", "voice": "longhuhu_v3"})
+    assert plan["voice"] == "longhuhu"
+
+
+@pytest.mark.parametrize("stale", ["cosyvoice-v3.5-flash", "cosyvoice-v3.5-plus",
+                                   "cosyvoice-v3-plus", "", None, "随便写的"])
+def test_retired_or_unknown_model_falls_back(stale) -> None:
+    """已下线的 v3.5 系（没有龙呼呼音色）与手改错值都回落到默认模型，不至于失声。"""
+    plan = bailian.PROVIDER.plan({"api_key": "sk-x", "model": stale})
+    assert plan["model"] == "cosyvoice-v3-flash"
+    assert plan["voice"] == "longhuhu_v3"
+
+
+def test_voice_is_not_a_configurable_field() -> None:
+    """音色不是设置项（只有一副嗓子）——字段里不该再有 voice 行。"""
+    assert "voice" not in {spec.name for spec in bailian.PROVIDER.fields}
 
 
 def test_empty_instruct_is_not_sent(monkeypatch, tmp_path) -> None:
@@ -49,30 +94,24 @@ def test_empty_instruct_is_not_sent(monkeypatch, tmp_path) -> None:
         return b"ID3audio"
 
     monkeypatch.setattr(bailian, "_synthesize", fake_synth)
-    plan = bailian.PROVIDER.plan({"api_key": "sk-x", "voice": "longhuhu_v3"})
+    plan = bailian.PROVIDER.plan({"api_key": "sk-x", "model": "cosyvoice-v2"})
     out = tmp_path / "a.mp3"
     bailian.PROVIDER.synth("你好呀", plan, out)
     assert "instruction" not in sent[0]["input"]
     assert out.read_bytes() == b"ID3audio"
 
 
-def test_instruct_is_sent_when_chosen(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("model", ["cosyvoice-v3-flash", "cosyvoice-v2"])
+def test_instruct_is_sent_on_both_models(monkeypatch, tmp_path, model) -> None:
+    """保留下来的两款都支持 Instruct，选了就要发出去。"""
     sent: list[dict] = []
 
     monkeypatch.setattr(bailian, "_synthesize", lambda body, key: (sent.append(body), b"x")[1])
     plan = bailian.PROVIDER.plan({
-        "api_key": "sk-x", "model": "cosyvoice-v2", "instruct": "你说话的情感是 happy。"})
+        "api_key": "sk-x", "model": model, "instruct": "你说话的情感是 happy。"})
     bailian.PROVIDER.synth("你好呀", plan, tmp_path / "b.mp3")
+    assert sent[0]["model"] == model
     assert sent[0]["input"]["instruction"] == "你说话的情感是 happy。"
-
-
-def test_v35_models_drop_instruct() -> None:
-    """v3.5 系模型不支持 Instruct：选了情绪也要丢弃，不发也不进缓存键。"""
-    values = {"api_key": "sk-x", "model": "cosyvoice-v3.5-flash",
-              "voice": "longhuhu", "instruct": "你说话的情感是 happy。"}
-    plan = bailian.PROVIDER.plan(values)
-    assert plan["instruct"] == ""
-    assert "happy" not in bailian.PROVIDER.flavor(values)
 
 
 def test_missing_key_raises_unavailable() -> None:
