@@ -263,6 +263,53 @@ _SOURCE_SWITCHES = (
 )
 
 
+def local_music_rows(dialog) -> list[SettingRow]:
+    """「本地点歌」组的三行（由「桌宠 · 音乐关联」组直接取用，不走 claim）。"""
+    rows: list[SettingRow] = [
+        SettingRow(
+            "local_music_dir",
+            "本地音乐目录",
+            "点歌与歌单从这里扫描歌曲。每首歌放一个子文件夹，内含原曲、.lrc 歌词与龙呼呼翻唱（可选）。",
+            getattr(dialog, "local_music_dir_picker", None),
+            stacked=True,
+        ),
+    ]
+    cover_check = getattr(dialog, "local_music_prefer_cover_check", None)
+    if cover_check is not None:
+        rows.append(
+            SettingRow(
+                "local_music_prefer_cover",
+                "点歌默认播翻唱",
+                "打开后右键点歌默认播「龙呼呼版」，没有翻唱的歌自动回落原曲。",
+                cover_check,
+            )
+        )
+    volume_spin = getattr(dialog, "local_music_volume_spin", None)
+    if volume_spin is not None:
+        rows.append(
+            SettingRow(
+                "local_music_volume",
+                "音乐音量",
+                "本地点歌的播放音量。桌宠说话时会自动压低到该音量的 20%，说完恢复。",
+                volume_spin,
+            )
+        )
+    return rows
+
+
+def save_local_music_settings(dialog) -> None:
+    """写回本地点歌三键。控件不存在就整键跳过（与来源开关同一口径）。"""
+    picker = getattr(dialog, "local_music_dir_picker", None)
+    if picker is not None:
+        dialog.config.set("local_music_dir", picker.text().strip())
+    cover = getattr(dialog, "local_music_prefer_cover_check", None)
+    if cover is not None:
+        dialog.config.set("local_music_prefer_cover", cover.isChecked())
+    volume = getattr(dialog, "local_music_volume_spin", None)
+    if volume is not None:
+        dialog.config.set("local_music_volume", int(volume.value()))
+
+
 def save_source_settings(dialog) -> None:
     """写回歌词来源开关与 foobar 窗口标题格式串。
 

@@ -123,6 +123,12 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "music_lyric_enabled",
         "music_lyric_lead_seconds",
         "music_player_paths",
+        "local_music_dir",
+        "local_music_prefer_cover",
+        "local_music_volume",
+        "local_music_dir",
+        "local_music_prefer_cover",
+        "local_music_volume",
         "music_sing_enabled",
         "music_sing_grace_seconds",
         "network_info_menu_enabled",
@@ -221,6 +227,8 @@ SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "ch
 
 # 默认值 dict 键集合现状快照 = 白名单 ∪ 特例键。
 # 2026-09-17 加入 music_player_paths（交付前审查 P1-3 登记）。
+# 2026-10-28 加入本地点歌 3 键（local_music_dir / prefer_cover / volume）。
+# 2026-10-28 加入本地点歌 3 键（local_music_dir / prefer_cover / volume）。
 # 2026-09-22 加入点击台词朗读 / 台词本地语音预缓存 / 自言自语配图概率 3 键
 # （self_talk_speak_enabled、self_talk_voice_precache_enabled、self_talk_image_chance）。
 # 2026-10-07 加入音乐播放器来源 2 键（foobar_lyrics_enabled / foobar_title_format）。

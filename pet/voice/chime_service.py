@@ -1403,6 +1403,16 @@ class VoiceChimeService:
         except Exception:
             return False
 
+    def is_audible(self) -> bool:
+        """语音通道是否正在/即将出声（本地点歌的音量压低探针用）。
+
+        :meth:`_player_engaged` 的公开别名。压低要在语音响起**前**生效，所以
+        认 ``LoadingMedia``（否则歌压慢半拍，语音第一个字混在满格音乐里）。
+        探针由 ``LocalMusicPlayer`` 的 500ms 轮询调用，异常由对方兜底——本方法
+        只如实报告，不做任何副作用。
+        """
+        return self._player_engaged()
+
     def _player_playing(self) -> bool:
         """播放器是否**真的在出声**（只认 ``playbackState == PlayingState`` 一个判据）。
 

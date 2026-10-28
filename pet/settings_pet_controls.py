@@ -483,6 +483,24 @@ def build_pet_controls(host) -> None:
     host.music_lyric_lead_spin.setValue(
         float(host.config.get("music_lyric_lead_seconds", LYRIC_LEAD_SECONDS))
     )
+    # 本地点歌（2026-10-28）：目录 / 默认版本 / 音量。三件套随音乐模块一起，
+    # 只在「音乐关联」组挂行；控件在此统一创建（与 music_sing_check 同一口径）。
+    host.local_music_dir_picker = ResourcePathPicker(
+        str(host.config.get("local_music_dir", "") or ""),
+        directory=True,
+        dialog_title="选择音乐文件夹",
+        parent=host,
+    )
+    host.local_music_prefer_cover_check = ToggleSwitch(host)
+    host.local_music_prefer_cover_check.setChecked(
+        bool(host.config.get("local_music_prefer_cover", True))
+    )
+    host.local_music_volume_spin = BrowserSpinBox(host)
+    host.local_music_volume_spin.setRange(0, 100)
+    host.local_music_volume_spin.setSuffix("%")
+    host.local_music_volume_spin.setValue(
+        int(host.config.get("local_music_volume", 80))
+    )
     host.golden_spin_click_check = ToggleSwitch(host)
     host.golden_spin_click_check.setChecked(bool(host.config.get("golden_spin_on_click", False)))
     host.golden_spin_direct_check = ToggleSwitch(host)

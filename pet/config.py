@@ -1221,6 +1221,10 @@ class Config:
             # 逃生口，也能在「设置 → 桌宠 → 播放器路径（高级）」里改（
             # settings_music.build_music_player_rows），空 = 走自动搜索。
             "music_player_paths": {},
+            # 本地点歌：音乐目录 + 点歌默认版本 + 音乐音量（详见 local_library.py）。
+            "local_music_dir": "",  # 空 = 未配置；例：D:\\dshjingyu\\music
+            "local_music_prefer_cover": True,  # 点歌默认播「龙呼呼版」，没有翻唱回落原曲
+            "local_music_volume": 80,  # 音乐音量（0~100）；语音响起时自动压低到 20%
             "agent_cost_enabled": False,  # Agent 本轮结束时显示消费金额（用余额差值估算）
             "golden_spin_on_click": False,  # 点击回应动画结束后自动接一段黄金回旋
             "golden_spin_direct": False,  # 点击触发黄金回旋时跳过点击动画，直接回旋并逐圈加速
@@ -1591,6 +1595,9 @@ class Config:
             "foobar_lyrics_enabled",
             "foobar_title_format",
             "music_player_paths",
+            "local_music_dir",
+            "local_music_prefer_cover",
+            "local_music_volume",
             "agent_cost_enabled",
             "golden_spin_on_click",
             "golden_spin_direct",
@@ -2172,6 +2179,16 @@ class Config:
         # 手动播放器路径：此前只有消费方读、没有 schema 登记，手改 config.json 会
         # 被 reload() 静默丢弃（交付前审查 P1-3）。清洗成 {注册表里的播放器键: 路径}。
         self.data["music_player_paths"] = _clean_music_player_paths(self.data.get("music_player_paths"))
+        # 本地点歌（2026-10-28）：目录为空 = 没配置，点歌入口按未配置禁用并说明；
+        # 路径不在这里判存在——扫描层对不存在的目录返回空歌单，入口照旧能打开说明原因。
+        self.data["local_music_dir"] = str(self.data.get("local_music_dir") or "").strip()
+        self.data["local_music_prefer_cover"] = _bool_or_default(
+            self.data.get("local_music_prefer_cover"), True
+        )
+        # 音量 0~100，默认 80：音乐不该和语音一样满格（压低逻辑还要在这之上打折）。
+        self.data["local_music_volume"] = int(
+            _float_or_default(self.data.get("local_music_volume"), 80.0, 0.0, 100.0)
+        )
         prewarm = str(self.data.get("media_prewarm", "balanced") or "balanced").strip().lower()
         self.data["media_prewarm"] = prewarm if prewarm in {"full", "balanced", "minimal"} else "balanced"
         # 批10-A3：默认 32→8（预测式预热使能）；32 是批9 引入仅一天的旧默认，
@@ -2330,6 +2347,9 @@ class Config:
             "foobar_title_format",
             "agent_cost_enabled",
             "music_player_paths",
+            "local_music_dir",
+            "local_music_prefer_cover",
+            "local_music_volume",
             "mem_skip_foreground",
             "mem_min_size_mb",
             "character_profiles",

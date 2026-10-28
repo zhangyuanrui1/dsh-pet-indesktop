@@ -47,6 +47,8 @@ from .shared import (
     add_music_open_qqmusic,
     add_music_open_soda,
     add_music_pause,
+    add_music_request,
+    add_music_songbook,
     add_music_prev,
     add_music_quit,
     add_no_move,
@@ -83,6 +85,8 @@ ACTION_LABELS = {
     "music_open_kugou": "打开酷狗音乐并播放",
     "music_open_soda": "打开汽水音乐并播放",
     "music_lyric_align": "歌词对齐",
+    "music_songbook": "歌单（本地音乐）",
+    "music_request": "点歌",
     "agent_cost": "显示本轮消费",
     "quick_launch": "快捷启动", "balance": "DeepSeek 余额",
     "memory_trim": "回收内存",
@@ -115,6 +119,7 @@ ACTION_ICONS = {
     "music": "play", "music_pause": "pause", "music_open_netease": "play",
     "music_open_qqmusic": "play", "music_open_kugou": "play",
     "music_open_soda": "play", "music_lyric_align": "play",
+    "music_songbook": "play", "music_request": "play",
     "quick_launch": "application", "balance": "balance", "harness": "harness",
     "memory_trim": "clear",
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
@@ -342,6 +347,11 @@ class MenuActionRegistry:
             # 运行时启用态表达（CONTEXT.md：Runtime Disabled 保留位置 + 解释原因）。
             "music_open_kugou": MenuActionSpec(add_music_open_kugou),
             "music_open_soda": MenuActionSpec(add_music_open_soda),
+            # 本地点歌（2026-10-28）：不挂 _music_lyric_configured——点歌不依赖
+            # 歌词开关，音乐模块没开时菜单项照样出现（回调侧有 _music_gated 兜底）；
+            # 目录未配置 / 没有歌的置灰与原因写在建造器里（Runtime Disabled）。
+            "music_songbook": MenuActionSpec(add_music_songbook),
+            "music_request": MenuActionSpec(add_music_request),
             # 平台门在 menu_layout 的 available_actions 过滤里生效（非 Windows
             # 整条不出现）；builder 自身也有同一道门，legacy 扁平布局直接调它。
             "memory_trim": MenuActionSpec(add_memory_trim, _memory_trim_available),

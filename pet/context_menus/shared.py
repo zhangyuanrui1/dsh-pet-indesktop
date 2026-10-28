@@ -1515,6 +1515,121 @@ def add_music_open_soda(menu: QMenu, pet, *, icons: bool = True):
     return _music_player_builder("soda")(menu, pet, icons=icons)
 
 
+# ------------------------------------------------------------- 本地点歌
+
+#: 点歌歌单的进程内缓存 {音乐目录: (目录 mtime, 歌单)}。菜单每次打开都重建，
+#: 不能每打开一次就把整个音乐目录扫一遍；mtime 变了才重扫（子文件夹内部增删
+#: 文件不动父目录 mtime，但"新增一首歌 = 新增文件夹"必然动它，够用）。
+_LOCAL_SONGS_CACHE: dict = {}
+
+
+def _local_songs_for_menu(pet) -> tuple[str, list]:
+    """（音乐目录, 歌单）。目录未配置返回 ("", [])，调用方据此置灰并说明。"""
+    from ..music.local_library import discover_songs
+
+    root = str(pet.cfg.get("local_music_dir") or "").strip()
+    if not root:
+        return "", []
+    try:
+        mtime = os.path.getmtime(root)
+    except OSError:
+        mtime = 0.0
+    cached = _LOCAL_SONGS_CACHE.get(root)
+    if cached is None or cached[0] != mtime:
+        cached = (mtime, discover_songs(root))
+        _LOCAL_SONGS_CACHE[root] = cached
+    return root, cached[1]
+
+
+def _sync_local_player_from_config(pet) -> None:
+    """把配置同步进共享播放器（音量 / 默认版本 / 歌单）。
+
+    刻意做成"每次打开菜单或面板都重推"而不是一次性初始化：这几个键随时可以在
+    设置里改，每存一份本地副本就多一处会过期的状态（与 ``detect.set_browser_media_enabled``
+    的"每拍推送"同口径）。
+    """
+    from ..music.local_player import shared_player
+
+    player = shared_player()
+    player.set_prefer_cover(bool(pet.cfg.get("local_music_prefer_cover", True)))
+    player.set_volume(int(pet.cfg.get("local_music_volume", 80)))
+    _root, songs = _local_songs_for_menu(pet)
+    player.set_playlist(songs)
+
+
+def open_songbook(pet) -> None:
+    """打开歌单面板（菜单与设置页共用入口）。"""
+    if _music_gated():
+        return
+    from ..music.songbook_dialog import SongbookDialog
+
+    _sync_local_player_from_config(pet)
+    SongbookDialog(pet.cfg, parent=_dialog_parent(pet)).exec()
+
+
+def add_music_songbook(menu: QMenu, pet, *, icons: bool = True):
+    """「歌单」：打开面板（列表 / 版本切换 / 进度 / 本地歌词）。"""
+    return add_action(
+        menu, "歌单（本地音乐）", "play" if icons else None,
+        lambda: open_songbook(pet), close_on_trigger=True,
+    )
+
+
+def add_music_request(menu: QMenu, pet, *, icons: bool = True):
+    """「点歌」子菜单：动态列出本地歌库，点一首唱一首。
+
+    为什么是"一个 id 挂动态子菜单"而不是把每首歌注册成动作 id：歌单随文件夹
+    变化，动作注册表是静态的；``add_harness`` 已经验证了这条路线。默认版本由
+    配置决定（翻唱优先，没翻唱回落原曲），想听另一版去歌单面板切。
+
+    目录未配置 / 目录里没有歌 → **置灰一项并说明原因**（Runtime Disabled：
+    保留位置 + 解释原因，而不是悄悄藏掉让用户以为功能坏了）。
+    """
+    from ..music.local_library import MENU_MAX_SONGS, choose_variant, variant_label
+
+    submenu = add_submenu(menu, "点歌", "play" if icons else None)
+    root, songs = _local_songs_for_menu(pet)
+    if not root:
+        item = add_action(submenu, "先到 设置 → 音乐 选择音乐目录", None, None)
+        item.setEnabled(False)
+        item.setToolTip("本地点歌还没有配置音乐目录（local_music_dir）")
+        return submenu
+    if not songs:
+        item = add_action(submenu, f"「{root}」里没有找到歌曲", None, None)
+        item.setEnabled(False)
+        item.setToolTip("每首歌放一个子文件夹（原曲 + 歌词 + 翻唱）")
+        return submenu
+    _sync_local_player_from_config(pet)
+    prefer_cover = bool(pet.cfg.get("local_music_prefer_cover", True))
+
+    def _sing(song, _pet=pet) -> None:
+        if _music_gated():
+            return
+        # 起播前再同步一次：菜单打开到点击之间配置可能被设置页改过。
+        _sync_local_player_from_config(_pet)
+        _shared_local_player().play_song(song)
+
+    for song in songs[:MENU_MAX_SONGS]:
+        default = choose_variant(song, prefer_cover)
+        label = f"{song.name}（{variant_label(default)}）"
+        add_action(
+            submenu, label, "play" if icons else None,
+            lambda s=song: _sing(s), close_on_trigger=True,
+        )
+    if len(songs) > MENU_MAX_SONGS:
+        add_action(
+            submenu, f"…还有 {len(songs) - MENU_MAX_SONGS} 首（打开歌单）",
+            None, lambda: open_songbook(pet), close_on_trigger=True,
+        )
+    return submenu
+
+
+def _shared_local_player():
+    from ..music.local_player import shared_player
+
+    return shared_player()
+
+
 def add_agent_cost(menu: QMenu, pet, *, icons: bool = True):
     """右键菜单开关：本轮结束时显示消费金额。
 

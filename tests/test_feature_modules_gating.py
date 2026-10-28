@@ -729,6 +729,8 @@ _MUSIC_ACTIONS = (
     "music_prev",
     "music_quit",
     "music_lyric_align",
+    "music_songbook",
+    "music_request",
     "music_open_netease",
     "music_open_qqmusic",
     "music_open_kugou",
@@ -737,7 +739,7 @@ _MUSIC_ACTIONS = (
 
 
 class _MusicPet:
-    """菜单投影用的最小宿主：歌词开关开着，九条音乐动作因此都进入可用集。"""
+    """菜单投影用的最小宿主：歌词开关开着，十一条音乐动作因此都进入可用集。"""
 
     class _Cfg:
         def get(self, key, default=None):

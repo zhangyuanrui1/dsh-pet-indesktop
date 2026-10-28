@@ -1818,6 +1818,16 @@ class AppShell:
             # 让位钩子：报时每次到点前先问节日提醒这一分钟要不要说话。
             # 用钩子而非让节日去"抢"通道，是为了与两个 QTimer 的触发先后解耦。
             service.yield_slot = self._chime_should_yield
+            # 本地点歌的音量压低探针（2026-10-28）：语音通道一出声（含加载中），
+            # 音乐音量自动压到 20%，说完恢复。探针挂在服务创建点而非菜单路径——
+            # AppShell 是服务的进程级持有点，经典窗口与 overlay 两套菜单走的是
+            # 同一个共享播放器；报时没开（服务不存在）就没有可压的对象，音乐照常放。
+            try:
+                from .music.local_player import shared_player
+
+                shared_player().attach_voice_activity(service.is_audible)
+            except Exception:
+                logging.exception("本地点歌压低探针接线失败（不影响语音功能）")
             self.voice_chime_service = service
         return self.voice_chime_service
 
