@@ -1915,11 +1915,16 @@ class AppShell:
         """预缓存台词音频的查找路径；没有就返回 None。
 
         键与产出侧是**同一个实现**（``self_talk_voice.find_audio`` → ``cached_audio``
-        → ``cache_path_for`` / ``cache_path``），查找顺序：当前配置（合成后端 + 音色
-        + 语速）解析出的 flavor 缓存 → 经典文本缓存
+        → ``cache_path_for`` / ``cache_path``），查找顺序：**首选后端**（合成后端 +
+        音色 + 语速）解析出的 flavor 缓存 → 经典文本缓存
         ``<配置目录>/self_talk_voice/<md5(文本)[:16]>.<扩展名>``（外部产出脚本那条
         兼容来源）。刻意放配置目录而不是仓库 assets —— 它属于用户数据（换资源包/
         更新不该丢），与报时缓存 voice_chime_cache 同级。
+
+        **只认首选后端**：把 fallback（edge）的键也放进命中范围，就会"百炼还没合过
+        这句、edge 有历史文件"时播 edge 的旧声音——配置写的音色与耳朵听到的完全无关，
+        而且从此不会再合百炼那一版（永远命中旧的）。兜底走
+        :meth:`self_talk_fallback_file`。
 
         分成两份实现曾经是隐患：算法漂移没有交叉测试兜着，表现只有"声音怎么变了"；
         只按文本命键则是"试听换了新声音、点击台词还是旧声音"。
@@ -1929,10 +1934,28 @@ class AppShell:
             return None
         return self_talk_voice.find_audio(directory, text, self.config)
 
+    def self_talk_fallback_file(self, text: str) -> Path | None:
+        """备用后端（``fallback``，通常是 edge）的存量台词音频；没有就 None。
+
+        只作兜底：首选后端连提交都做不到时播一句旧音色的台词，好过点了没声。
+        **不能**参与正常命中——那正是"选了百炼龙呼呼、耳朵里却是 edge 晓晓"的成因
+        （见 ``pet/voice/self_talk.py`` 的 ``find_audio``）。
+        """
+        directory = getattr(getattr(self, "config", None), "dir", None)
+        if directory is None:
+            return None
+        return self_talk_voice.find_fallback_audio(directory, text, self.config)
+
     def speak_self_talk(self, text: str = "") -> bool:
         """点击自言自语朗读：把同一句话送进报时服务的音频通道。
 
         优先播预缓存的本地文件（零延迟、断网可用）；没有缓存才回落到在线合成。
+        本地文件只认**当前选的音色**（``self_talk_voice_file``），备用后端的旧音频
+        只在首选后端连提交都做不到时兜底——否则"选了龙呼呼、听见晓晓"。
+
+        **连点只留最后一句**：起播前先 ``interrupt_speech`` 掐掉上一段。这条对
+        **整个音频通道**生效（报时 / 聊天回复朗读也在这条通道上），取舍是"主人刚点了，
+        就该听这一次的回应"——两句话叠在一起比截断上一句更糟。
 
         与 ``say_now`` 同理，通道可能是为本次点击才懒创建的（例如报时关着、
         只想要点击出声），此时服务里的 ``_cfg`` 还是模块默认音色；未在运行就
@@ -1951,6 +1974,16 @@ class AppShell:
             return False
         if channel is None:
             return False
+        # 连点只留最后一句：先把上一段掐掉（正在播的、排队待播的、还在合的），再播这次
+        # 点击的台词。不掐会变成"每句都念一遍"——``play_file`` 在通道忙时返回 False，
+        # 代码顺势落到 ``speak()``，而 ``speak()`` 是**排队**（深度 1 新覆盖旧）而不是
+        # 丢弃，前一句播完就接着播这一句，点五下就听五句。
+        interrupt = getattr(channel, "interrupt_speech", None)
+        if callable(interrupt):
+            try:
+                interrupt(reason="点击新台词")
+            except Exception:
+                logging.exception("打断上一段点击台词失败（继续播新的）")
         cached = self.self_talk_voice_file(stripped)
         if cached is not None:
             try:
@@ -1968,11 +2001,25 @@ class AppShell:
                 channel.apply_config()
             # 交互应答显式豁免免打扰（issue #208：点了就要有回应，与点击台词气泡
             # 同口径）；提醒类播报用 speak() 的默认值，免打扰期间静音。
-            channel.speak(stripped, log_tag="点击自言自语", respect_quiet=False)
+            submitted = channel.speak(stripped, log_tag="点击自言自语", respect_quiet=False)
         except Exception:
             logging.exception("点击自言自语语音播报失败")
-            return False
-        return True
+            submitted = False
+        if submitted:
+            return True
+        # 首选后端连提交都做不到（通道拿不到 / 后端整个不可用）：退到备用后端的存量
+        # 音频。播一句旧音色的台词，好过点了没声；正常路径不会走到这里。
+        fallback = self.self_talk_fallback_file(stripped)
+        if fallback is not None:
+            try:
+                if channel.play_file(str(fallback), log_tag="点击自言自语"):
+                    logging.getLogger("dsh-pet-standalone").info(
+                        "点击自言自语：首选后端不可用，改播备用音频 %s（旧音色）",
+                        fallback.name)
+                    return True
+            except Exception:
+                logging.exception("备用台词播放失败：%s", fallback.name)
+        return False
 
     def precache_self_talk_voice(self, reason: str = "") -> bool:
         """把还没有本地音频的点击台词（含点击动画绑定台词）交给后台补齐。

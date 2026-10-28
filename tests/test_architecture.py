@@ -307,7 +307,10 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 按文件约定只随实测校准，不为达标压行（拆分仍是待办）。
 # 2026-10-22 上调到 2722：AI 域新增「场景扮演」组的一行 claim（roleplay_enabled /
 # roleplay_scene），行本体在 _AiSettingsPage。实测 2722。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2722  # 2026-10-22：场景扮演组 claim 一行
+# 2026-10-28 上调到 2733：互动域新增「台词语音库」一行（设置项 + 面板入口接线），
+# 行本体在 settings_interaction / settings_pet_controls，但 claim 与分页装配留在本文件。
+# 实测 2733；再涨就该把互动域那一段拆成独立页模块了。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2733  # 2026-10-28：语音库一行
 
 
 def _read(name: str) -> str:

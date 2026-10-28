@@ -589,13 +589,21 @@ class VoiceChimeService:
         self._timer.stop()
         self._detach_quiet_listener()
 
-    def interrupt_speech(self) -> bool:
+    def interrupt_speech(self, *, reason: str = "") -> bool:
         """立刻掐断本轮播报，但**不停服务**。返回之前是否真有东西被掐掉。
 
         与 :meth:`stop` 的分工（这条边界必须守住）：``stop`` 是收口——停调度、
-        摘免打扰监听、此后这个实例不再出声；``interrupt`` 是"让一让"——用户按下
-        语音热键要说话，把当前这段停住、把还没出声的作废，**调度照跑**。用 ``stop``
-        顶替会让语音对话只在第一句之后彻底静音（下一次回复朗读时通道已停）。
+        摘免打扰监听、此后这个实例不再出声；``interrupt`` 是"让一让"——当前这段停住、
+        还没出声的作废，**调度照跑**。用 ``stop`` 顶替会让语音对话只在第一句之后彻底
+        静音（下一次回复朗读时通道已停）。
+
+        两个调用方，语义都是"后到的覆盖先到的"：
+
+        * **语音输入开始录音**（``reason`` 留空）——不能把她自己的声音录进去；
+        * **点击新的动画台词**（``reason="点击新台词"``）——连点只听最后一句。这里必须
+          掐，不能只靠 ``play_file`` 的"通道忙就跳过"：跳过之后 ``speak_self_talk``
+          会顺势落到 ``speak()``，而那是**排队**（深度 1 新覆盖旧）而不是丢弃，前一句
+          播完就接着播这一句——点五下就听五句。
 
         四件事一件都不能少，少一件就还有声音漏出来：
 
@@ -622,7 +630,7 @@ class VoiceChimeService:
             self._next_synthesis_generation()
         self._disarm_unlock_timer()
         if had_audio:
-            logger.info("语音播报被打断（用户开始说话）")
+            logger.info("语音播报被打断（%s）", reason or "用户开始说话")
         return had_audio
 
     def is_running(self) -> bool:
@@ -752,7 +760,9 @@ class VoiceChimeService:
         # 键里的 provider flavor 也由 ``_cache_path`` 统一带上：自己拼平铺 dict 会
         # 落到另一个键上，预览永远命中不了这里合出来的文件。
         paths = [self._cache_path(stripped, attempt) for attempt in attempts]
-        if any(_cache_hit(path) for path in paths):
+        # 命中只看首选后端（attempts[0]）：fallback（edge）的旧文件是另一把嗓子，
+        # 命中它等于"配置的是龙呼呼、耳朵里是晓晓"（见 _fire 同款说明）。
+        if any(_cache_hit(path) for path in paths[:1]):
             return True
         if self._busy:
             # 通道忙（多半是上一段预合成在飞）：这次放弃，**由调用方稍后重试**。
@@ -863,7 +873,9 @@ class VoiceChimeService:
         self._precache_slot = next_slot
         self._precache_text = sentence
         self._precache_bubble = bubble
-        self._precache_path = next((str(p) for p in paths if _cache_hit(p)), None)
+        # 与 _fire 同口径：只有首选后端的产物才算"已预合成"，否则到点不会命中、
+        # 白白跳过合成（旧音色的文件在，当前音色永远合不出来）。
+        self._precache_path = next((str(p) for p in paths[:1] if _cache_hit(p)), None)
         if self._precache_path:
             logger.info("预合成命中已有缓存：%s", Path(self._precache_path).name)
             return
@@ -999,7 +1011,12 @@ class VoiceChimeService:
         # 缓存命中（含预合成已完成）直接播放，零网络延迟；合成中不阻塞缓存播放。
         # 命中要求文件非空：失败的合成会留下 0 字节文件，只判 exists() 会把它当成
         # 「已有缓存」→ 播出一声静音且再也不重新合成。
-        for out_path in paths:
+        # 命中只认**首选后端**的键（attempts[0] 是 _usable_attempts 过滤后的第一个，
+        # 即本次真正会用的那把嗓子）。原先遍历整条尝试链，于是"首选还没合过、fallback
+        # 在旧版本里合过"就播 fallback 那份——而且从此永远命中旧的，当前音色再也不会
+        # 被合成（真事故：主人选了百炼龙呼呼，报时/点击出来却是 edge 晓晓）。
+        # 合成仍用全链：首选失败时 fallback 顶上，产物照旧落到它自己的键上。
+        for out_path in paths[:1]:
             if not _cache_hit(out_path):
                 continue
             if role in PRECACHE_ROLES:

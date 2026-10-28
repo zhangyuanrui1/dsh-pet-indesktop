@@ -177,8 +177,25 @@ def cached_audio(config_dir, text: str, attempts=()) -> Path | None:
 
 
 def find_audio(config_dir, text: str, config) -> Path | None:
-    """点击路径的查找：按**当前配置**解析出的 flavor 键 → 经典文本缓存。"""
-    return cached_audio(config_dir, text, _flavor_attempts(config))
+    """点击路径的查找：**首选后端**解析出的 flavor 键 → 经典文本缓存。
+
+    **只认首选后端**（真事故：选了百炼龙呼呼，点出来却是 edge 晓晓）。原先这里传的是
+    整条尝试链（含 ``fallback`` 的 edge），于是"哪家有历史文件就播哪家"——百炼还没合过
+    这句、edge 在旧版本里合过，命中的就是 edge 那份，配置写的音色与耳朵听到的完全无关，
+    而且从此再也不会去合百炼那一版（永远命中旧的）。fallback 后端的产物退为
+    :func:`find_fallback_audio` 的兜底来源，只在首选后端这条路走不通时才用。
+    """
+    return cached_audio(config_dir, text, _primary_attempt(config))
+
+
+def find_fallback_audio(config_dir, text: str, config) -> Path | None:
+    """备用后端（``fallback``，通常是 edge）已有的产物；没有就 None。
+
+    只给**首选后端合成不出来**时兜底（通道不可用 / 后端整体失败）：播一句旧音色的
+    台词，好过点了没声。刻意不参与 ``find_audio`` 的常规命中——那会让旧音色盖过用户
+    当下选的音色（见 ``find_audio`` 的说明）。
+    """
+    return _flavor_audio(config_dir, str(text).strip(), _flavor_attempts(config)[1:])
 
 
 def pick_voice(text: str) -> str:
@@ -202,6 +219,123 @@ def pick_voice(text: str) -> str:
         family = "neutral"
     slot = int(hashlib.md5(stripped.encode("utf-8")).hexdigest(), 16) % _FAMILY_SIZE + 1
     return f"{family}-{slot:02d}"
+
+
+# --------------------------------------------------------------- 语音库面板
+# 2026-10-28 机主需求：「互动 → 点击动画台词绑定」的台词都很短且反复播放，希望
+# 直接播库存 MP3 而不是每次调接口（这一点本来就成立：首次合成后的产物按
+# 「文本 + 音色」落盘，点击侧先查库）。缺的是**看得见与管得动**——库里有什么、
+# 占多少、哪些已经没人引用（改词/换音色留下的旧文件），于是有下面这组接口。
+
+
+def library_dir(config) -> Path:
+    """台词库目录（``<配置目录>/self_talk_voice``，不存在也算一个"空库"）。"""
+    return Path(getattr(config, "dir", Path("."))) / CACHE_DIR_NAME
+
+
+def _expected_stems(config_dir, lines, attempts) -> set[str]:
+    """当前配置**应该存在**的产物文件名主干（含经典文本缓存那一套）。
+
+    文件名主干就是身份：``<cache_key>``（flavor 键，随音色/语速变）与 ``<md5>``
+    （经典文本键，不含 flavor）。两者都不在集合里的文件 = 没人引用（旧词、旧音色）。
+    """
+    stems: set[str] = set()
+    for text, _source in lines:
+        stems.add(cache_path(config_dir, text).stem)
+        for attempt in attempts:
+            stems.add(cache_path_for(config_dir, text, attempt).stem)
+    return stems
+
+
+def library_snapshot(config, *, configs=None) -> dict:
+    """台词库快照（面板一次刷新就取这一份）。
+
+    返回::
+
+        {"dir": Path, "entries": [{"text", "source", "path", "size",
+                                   "fallback_path", "fallback_size"}...],
+         "ready": int, "missing": int,
+         "total_bytes": int,          # 目录里所有音频的体积（含无用文件）
+         "orphan_paths": [Path...], "orphan_bytes": int}
+
+    ``path`` 只认**首选后端**的产物（与点击时的 :func:`find_audio` 同一口径），所以
+    "待生成"就是"点了会去联网合成"，面板报的数字与耳朵听到的一致。``fallback_path``
+    是备用后端（edge）的旧产物：它还能在首选后端罢工时兜底，但不算"已配音"——
+    否则面板会说"全部已配音"，而用户点了听到的仍是另一把嗓子。
+
+    ``orphan_paths`` 是"没有任何现存台词引用"的文件：改词前的旧音频、换音色前的
+    旧音色产物。删掉它们只有代价（下次真用到要重新合成），没有数据风险。
+    """
+    config_dir = Path(getattr(config, "dir", Path(".")))
+    directory = library_dir(config)
+    lines = collect_all_lines([config] if configs is None else configs)
+    try:
+        attempts = _attempts(config)
+    except Exception:  # noqa: BLE001 —— 后端配置异常不该让面板打不开
+        logger.debug("语音库快照：解析合成尝试失败，按无 flavor 处理", exc_info=True)
+        attempts = ()
+
+    entries = []
+    ready = 0
+    for text, source in lines:
+        path = find_audio(config_dir, text, config)
+        alt = None if path is not None else find_fallback_audio(config_dir, text, config)
+        if path is not None:
+            ready += 1
+        entries.append({
+            "text": text,
+            "source": source,
+            "path": path,
+            "size": path.stat().st_size if path is not None else 0,
+            "fallback_path": alt,
+            "fallback_size": alt.stat().st_size if alt is not None else 0,
+        })
+
+    expected = _expected_stems(config_dir, lines, attempts)
+    total_bytes = 0
+    orphan_paths: list[Path] = []
+    if directory.is_dir():
+        for path in sorted(directory.iterdir()):
+            if not path.is_file() or path.name.startswith(TEMP_PREFIX):
+                continue
+            try:
+                total_bytes += path.stat().st_size
+            except OSError:
+                continue
+            if path.stem not in expected:
+                orphan_paths.append(path)
+    orphan_bytes = sum(p.stat().st_size for p in orphan_paths if p.is_file())
+    return {
+        "dir": directory,
+        "entries": entries,
+        "ready": ready,
+        "missing": len(entries) - ready,
+        "total_bytes": total_bytes,
+        "orphan_paths": orphan_paths,
+        "orphan_bytes": orphan_bytes,
+    }
+
+
+def delete_orphans(snapshot: dict) -> tuple[int, int]:
+    """删掉快照里的无用文件，返回 ``(删除数, 释放字节)``。
+
+    只删 ``library_snapshot`` 判定为无引用的文件：删之前已经在快照里定过身份，
+    不用再猜；单个删除失败（被占用）跳过，不中断其余删除。
+    """
+    removed = 0
+    freed = 0
+    for path in snapshot.get("orphan_paths") or []:
+        try:
+            size = path.stat().st_size
+            path.unlink()
+        except OSError:
+            logger.debug("删除无用台词语音失败（可能被占用）：%s", path)
+            continue
+        removed += 1
+        freed += size
+    if removed:
+        logger.info("台词语音库：清理无用文件 %d 个，释放 %.1f MB", removed, freed / 1024 / 1024)
+    return removed, freed
 
 
 # --------------------------------------------------------------- 名单
@@ -276,7 +410,10 @@ def _pending(config_dir, lines, attempts=()) -> list[tuple[str, str]]:
         ]
     return [
         (text, source) for text, source in lines
-        if _flavor_audio(config_dir, text, attempts) is None
+        # 只认**首选后端**的产物（``attempts[:1]``），与点击侧 ``find_audio`` 同一
+        # 口径：fallback（edge）的旧文件是另一把嗓子，认它就会"面板说全部已配音、
+        # 点下去却是晓晓"，而且当前音色永远不会被合成。
+        if _flavor_audio(config_dir, text, attempts[:1]) is None
     ]
 
 
@@ -362,6 +499,16 @@ def _flavor_attempts(config) -> tuple:
     return tuple(out)
 
 
+def _primary_attempt(config) -> tuple:
+    """**首选后端**那一项尝试（``attempts[0]``）；没有可用后端时为空元组。
+
+    ``synth_attempts`` 的顺序是「主后端 → 各 fallback」，所以第一项就是用户当前选的
+    那把嗓子。空元组会让 :func:`cached_audio` 退回只看经典文本缓存，那是"配置读不出
+    后端"时唯一还算合理的命中来源。
+    """
+    return _flavor_attempts(config)[:1]
+
+
 def _attempts(config) -> tuple:
     """当前配置下可用的合成尝试链（与「试听」同一条：同一后端、同一音色）。
 
@@ -431,18 +578,20 @@ def _synth_server(endpoint: str, text: str) -> bytes:
 # --------------------------------------------------------------- 执行
 
 
-def run_precache(config, *, configs=None, server: str | None = None) -> dict:
+def run_precache(config, *, configs=None, server: str | None = None,
+                 respect_switch: bool = True, progress=None) -> dict:
     """同步补齐缺失的台词音频；返回统计（后台线程与测试都走这里）。
 
     ``config`` 是主配置（合成后端 / 开关），``configs`` 是每只活跃宠的配置视图
     （台词名单是每宠键，不给就只按 ``config`` 自己那份读）。
 
-    自建服务（``DSH_PET_TTS_URL`` 或显式 ``server``）先走；它不在线就**落回注册表**：
-    不允许再出现"服务不在，于是一个文件都没有、用户也看不到任何提示"的静默结局
-    （issue #305）。单句合成失败不影响其余句子，也不动已缓存的句子。
+    ``respect_switch=False``：**手动一键生成**（语音库面板）——点按钮就是授权，
+    不再被默认关闭的开关挡住；``respect_switch=True``（默认）时开关在**句间**复查：
+    合成一批要几分钟，期间用户关掉开关就立刻停止开新请求（已发出的那一次不取消
+    ——那是 provider 自己的超时）。
 
-    开关在**句间**复查：合成一批要几分钟，期间用户关掉开关就立刻停止开新请求
-    （已发出的那一次不取消——那是 provider 自己的超时）。
+    ``progress`` 是 ``(done, total)`` 回调：每句结束后调一次（含失败/跳过的），给
+    面板显示进度；回调抛异常不影响合成。
     """
     stats = {"checked": 0, "made": 0, "failed": 0, "skipped": 0, "reason": ""}
     config_dir = config.dir
@@ -472,7 +621,7 @@ def run_precache(config, *, configs=None, server: str | None = None) -> dict:
         return stats
 
     for index, (text, source) in enumerate(pending):
-        if not enabled(config):
+        if respect_switch and not enabled(config):
             logger.info("台词语音预缓存：开关已关闭，句间停止（还剩 %d 句）", len(pending) - index)
             stats["reason"] = "switched-off"
             break
@@ -483,19 +632,33 @@ def run_precache(config, *, configs=None, server: str | None = None) -> dict:
             except Exception:
                 stats["failed"] += 1
                 logger.exception("台词语音预缓存失败：%s（%s）", text, source)
+                _notify_progress(progress, index + 1, len(pending))
                 continue
             stats["made"] += 1
             logger.info("台词语音预缓存完成：%s（%s，自建服务）", text, source)
+            _notify_progress(progress, index + 1, len(pending))
             continue
         try:
             target = _synth_with_backends(config_dir, text, attempts)
         except Exception:
             stats["failed"] += 1
             logger.exception("台词语音预缓存失败：%s（%s）", text, source)
+            _notify_progress(progress, index + 1, len(pending))
             continue
         stats["made"] += 1
         logger.info("台词语音预缓存完成：%s（%s）-> %s", text, source, target.name)
+        _notify_progress(progress, index + 1, len(pending))
     return stats
+
+
+def _notify_progress(progress, done: int, total: int) -> None:
+    """进度回调（面板用）：抛异常绝不影响合成本身。"""
+    if progress is None:
+        return
+    try:
+        progress(done, total)
+    except Exception:
+        logger.debug("台词语音预缓存进度回调失败", exc_info=True)
 
 
 def enabled(config) -> bool:
@@ -512,25 +675,31 @@ _lock = threading.Lock()
 _pending_run: tuple | None = None
 
 
-def start_precache(config, *, configs=None, server: str | None = None) -> bool:
+def start_precache(config, *, configs=None, server: str | None = None,
+                   respect_switch: bool = True) -> bool:
     """在后台补齐缺失台词（单飞：上一轮没跑完就不再起一轮）。
 
     ``configs`` 是每只活跃宠的配置视图（台词名单是每宠键）。返回是否真的起了新一轮；
     调用方（保存设置 / 启动）不需要等它。
+
+    ``respect_switch=False`` 是给「台词语音库」面板的**手动一键生成**用的：用户点了
+    按钮就是明确授权这一次合成，不再受 ``self_talk_voice_precache_enabled``（默认关）
+    约束——否则面板上点一下毫无反应，用户只会以为坏了。自动触发（保存设置 / 启动）
+    仍走默认 True。
 
     单飞不等于丢弃：上一轮还在跑时不并发，但把这次请求记为**待处理快照**，当前批
     结束后由 ``_run_quietly`` 按它补跑一轮——否则合成期间追加的台词要等到下次保存
     设置或重启才有缓存。
     """
     global _active, _pending_run
-    if not enabled(config):
+    if respect_switch and not enabled(config):
         return False
     with _lock:
         if _active is not None and _active.is_alive():
-            _pending_run = (config, configs, server)
+            _pending_run = (config, configs, server, respect_switch)
             return False
         thread = threading.Thread(
-            target=_run_quietly, args=(config, configs, server),
+            target=_run_quietly, args=(config, configs, server, respect_switch),
             name="self-talk-voice-precache", daemon=True,
         )
         _active = thread
@@ -538,17 +707,23 @@ def start_precache(config, *, configs=None, server: str | None = None) -> bool:
     return True
 
 
-def _run_quietly(config, configs, server) -> None:
+def _run_quietly(config, configs, server, respect_switch: bool = True) -> None:
     """跑完当前批后，若期间又收到请求（最新快照）就按它补跑一轮。"""
     global _active, _pending_run
     while True:
         try:
-            run_precache(config, configs=configs, server=server)
+            run_precache(config, configs=configs, server=server,
+                         respect_switch=respect_switch)
         except Exception:
             logger.exception("台词语音预缓存线程异常（不影响点击）")
         with _lock:
             next_run, _pending_run = _pending_run, None
-            if next_run is None or not enabled(next_run[0]):
+            if next_run is None:
                 _active = None
                 return
-            config, configs, server = next_run
+            next_config, next_configs, next_server, next_respect = next_run
+            if next_respect and not enabled(next_config):
+                _active = None
+                return
+            config, configs, server, respect_switch = (
+                next_config, next_configs, next_server, next_respect)

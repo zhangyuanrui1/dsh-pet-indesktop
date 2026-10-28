@@ -179,6 +179,25 @@ def _is_overlay_topology() -> bool:
     return overlay_settings_command.is_overlay_topology()
 
 
+def open_voice_library(host) -> None:
+    """打开「台词语音库」面板（列清单 / 手动补齐 / 清理无用音频）。
+
+    多宠时把**每只活跃宠的配置视图**一并交给面板，名单才是每只宠自己的
+    （``self_talk_texts`` 与点击绑定都是每宠键）；取不到就只用主配置，退化为
+    单宠口径而不是打不开面板。
+    """
+    from .voice_library_dialog import VoiceLibraryDialog
+
+    configs = None
+    getter = getattr(host.parent(), "_self_talk_voice_configs", None)
+    if callable(getter):
+        try:
+            configs = getter()
+        except Exception:
+            configs = None
+    VoiceLibraryDialog(host.config, configs=configs, parent=host).exec()
+
+
 def stream_capture_hint() -> str:
     """「直播捕获兼容」说明文案（T4 / PHASE4_DESIGN.md:80-82）。
 
@@ -583,6 +602,13 @@ def build_pet_controls(host) -> None:
     host.click_talk_bindings_btn = QPushButton("编辑…", host)
     host.click_talk_bindings_btn.setObjectName("clickTalkBindingsButton")
     host.click_talk_bindings_btn.clicked.connect(host._open_click_talk_bindings)
+    # 台词语音库（2026-10-28）：看哪些台词已有本地配音、手动补齐、清理旧音频。
+    # 点击时说库存音频这件事本来就在运行时生效（speak_self_talk 先查库），
+    # 这个面板补的是"看得见 + 管得动"。
+    host.click_talk_voice_library_btn = QPushButton("语音库…", host)
+    host.click_talk_voice_library_btn.setObjectName("clickTalkVoiceLibraryButton")
+    host.click_talk_voice_library_btn.clicked.connect(
+        lambda: open_voice_library(host))
 
     # Agent 联动：agent_link 配置（思考文案编辑已移除；后续音效/专属层共用此引用）
     agent_link_cfg = host.config.get("agent_link", {})

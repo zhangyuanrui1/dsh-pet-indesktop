@@ -2309,7 +2309,8 @@ def _precached_wav(cfg, text: str) -> Path:
     return path
 
 
-def _recording_channel(played: list, spoken: list, *, play_ok: bool = True):
+def _recording_channel(played: list, spoken: list, *, play_ok: bool = True,
+                       speak_ok: bool = True, interrupts: list | None = None):
     class FakeChannel:
         def is_running(self):
             return True
@@ -2317,13 +2318,20 @@ def _recording_channel(played: list, spoken: list, *, play_ok: bool = True):
         def apply_config(self):
             pass
 
+        def interrupt_speech(self, *, reason=""):
+            # 点击新台词前要掐掉上一段（连点只留最后一句）：记下来供用例断言，
+            # 没传 interrupts 的用例照样有这个入口，免得走 getattr 兜底把问题绕过去。
+            if interrupts is not None:
+                interrupts.append(reason)
+            return True
+
         def play_file(self, path, *, log_tag=""):
             played.append(path)
             return play_ok
 
         def speak(self, text, *, log_tag="", respect_quiet=True):
             spoken.append(text)
-            return True
+            return speak_ok
 
     return FakeChannel()
 
@@ -2404,6 +2412,213 @@ def test_speak_self_talk_falls_back_when_local_playback_fails(tmp_path, monkeypa
     assert shell.speak_self_talk(text) is True
     assert played, "先尝试本地文件"
     assert spoken == [text], "本地播不了要回退在线合成"
+
+
+def test_chime_cache_hit_ignores_the_fallback_backend_old_voice(tmp_path, monkeypatch):
+    """报时缓存命中只认首选后端的产物：fallback（edge）的旧文件不得顶替。
+
+    真事故（与点击自言自语同源）：主人把音色换成百炼龙呼呼，报时却仍是 edge 晓晓。
+    查找范围原是整条尝试链，"首选还没合过、fallback 在旧版本里合过"就命中了旧的
+    那份——而且从此永远命中旧的，当前音色再也不会被合成。
+    """
+    from pet.voice_chime import normalize_chime_config, synth_attempts
+
+    service, _app, cfg = _service(tmp_path, monkeypatch)
+    service.apply_config()
+    service._cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # 首选 bailian（龙呼呼）+ 回退 edge：真实配置里就是这个形状
+    cfg.set("voice_chime_tts_backend", "bailian")
+    cfg.set("voice_chime_tts_fallback", True)
+    attempts = synth_attempts(normalize_chime_config(cfg))
+    assert [a.provider for a in attempts][:2] == ["bailian", "edge"], (
+        "前提：尝试链是「首选 bailian → 备用 edge」")
+    monkeypatch.setattr(service, "_usable_attempts", lambda: attempts)
+
+    sentence = "现在是下午两点整。"
+    stale = service._cache_path(sentence, attempts[1])   # 备用后端（旧音色）的产物
+    stale.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00")
+    assert _cache_hit(stale)
+
+    service._fire(sentence, datetime.now(), None, show_bubble=False, role="chime")
+
+    assert service._player.plays == 0, "备用后端的旧音频不许顶替当前设置的音色"
+    assert service._busy is True, "该转为当前音色的合成（而不是播旧文件）"
+
+
+def test_chime_cache_hit_still_plays_the_preferred_backend_file(tmp_path, monkeypatch):
+    """首选后端有产物时照旧零延迟播放——收敛命中范围不能把正常路径也堵掉。"""
+    from pet.voice_chime import normalize_chime_config, synth_attempts
+
+    service, _app, cfg = _service(tmp_path, monkeypatch)
+    service.apply_config()
+    service._cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg.set("voice_chime_tts_backend", "bailian")
+    cfg.set("voice_chime_tts_fallback", True)
+    attempts = synth_attempts(normalize_chime_config(cfg))
+    monkeypatch.setattr(service, "_usable_attempts", lambda: attempts)
+
+    sentence = "现在是下午三点整。"
+    fresh = service._cache_path(sentence, attempts[0])
+    fresh.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00")
+
+    service._fire(sentence, datetime.now(), None, show_bubble=False, role="chime")
+
+    assert service._player.plays == 1
+    assert service._busy is False, "命中缓存就不该再起合成"
+
+
+def test_speak_self_talk_ignores_the_stale_fallback_voice(tmp_path, monkeypatch):
+    """当前音色没合过这句、库里只有备用后端（edge）的旧音频 → 走合成，不播旧的。
+
+    真事故：主人选了百炼龙呼呼，点出来却是 edge 晓晓。原先查找范围含整条尝试链，
+    于是"哪家有文件就播哪家"，而且从此永远命中旧的、当前音色再也不会被合成。
+    """
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    stale = _precached_wav(cfg, "另一把嗓子留下的旧台词。")
+    played: list[str] = []
+    spoken: list[str] = []
+    monkeypatch.setattr(shell, "ensure_audio_channel",
+                        lambda: _recording_channel(played, spoken))
+    # 备用后端确实有一份可播的旧音频：这正是"不能顶替当前音色"的那个它
+    monkeypatch.setattr(shell, "self_talk_fallback_file", lambda _text: stale)
+
+    text = "今天也要认真工作呀。"
+    assert shell.speak_self_talk(text) is True
+    assert played == [], "备用后端的旧音频不许顶替当前设置的音色"
+    assert spoken == [text], "该走当前音色的在线合成"
+
+
+def test_speak_self_talk_plays_the_fallback_file_when_the_primary_cannot_submit(
+        tmp_path, monkeypatch):
+    """首选后端连提交都做不到时，退到备用后端的存量音频——点了不能没声。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    stale = _precached_wav(cfg, "另一把嗓子留下的旧台词。")
+    played: list[str] = []
+    spoken: list[str] = []
+    monkeypatch.setattr(shell, "ensure_audio_channel",
+                        lambda: _recording_channel(played, spoken, speak_ok=False))
+    monkeypatch.setattr(shell, "self_talk_fallback_file", lambda _text: stale)
+
+    assert shell.speak_self_talk("今天也要认真工作呀。") is True
+    assert played == [str(stale)]
+    assert spoken == ["今天也要认真工作呀。"], "先试过当前音色才轮到兜底"
+
+
+def test_speak_self_talk_silently_degrades_without_any_audio(tmp_path, monkeypatch):
+    """两个后端都没戏时只返回 False：调用方的气泡照常，不许抛。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    played: list[str] = []
+    spoken: list[str] = []
+    monkeypatch.setattr(shell, "ensure_audio_channel",
+                        lambda: _recording_channel(played, spoken, speak_ok=False))
+    monkeypatch.setattr(shell, "self_talk_fallback_file", lambda _text: None)
+
+    assert shell.speak_self_talk("今天也要认真工作呀。") is False
+    assert played == [] and spoken == ["今天也要认真工作呀。"]
+
+
+def test_interrupt_speech_stops_the_current_segment(tmp_path, monkeypatch):
+    """``interrupt_speech`` 必须真停住这一段并清掉待播，之后通道立刻可再用。
+
+    这条是"连点只留最后一句"的地基：点击路径靠它把上一句掐掉。少停一步就会出现
+    "点得越快、念得越多"——``speak()`` 是排队（深度 1 新覆盖旧），前一句播完接着
+    播这一句。
+    """
+    service, _app, _cfg = _service(tmp_path, monkeypatch)
+    assert service._play_only(str(tmp_path / "a.mp3")) is True
+    service._pending_speech = "排队等着播的一句"
+    service._queued_fire = ("到点补播的一句", datetime.now(), None, False, "play", True)
+
+    assert service.interrupt_speech(reason="点击新台词") is True
+
+    assert service._player.stops == 1, "正在出声的这一段必须停住"
+    assert service._pending_speech is None, "待播队列同批作废，不能补播一条过期台词"
+    assert service._queued_fire is None
+    assert service._channel_idle() is True, "掐完必须立刻能播下一句"
+
+
+def test_interrupt_speech_is_a_noop_when_nothing_is_playing(tmp_path, monkeypatch):
+    """没东西在播时打断不得抛、返回 False（点击第一下就走这里）。"""
+    service, _app, _cfg = _service(tmp_path, monkeypatch)
+
+    assert service.interrupt_speech(reason="点击新台词") is False
+
+
+def test_speak_self_talk_interrupts_before_playing(tmp_path, monkeypatch):
+    """连点：先打断上一段，再播这一句（顺序错了就等于没打断）。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+    text = "今天也要认真工作呀。"
+    _precached_wav(cfg, text)
+
+    events: list[tuple] = []
+
+    class Chan:
+        def is_running(self):
+            return True
+
+        def apply_config(self):
+            pass
+
+        def interrupt_speech(self, *, reason=""):
+            events.append(("interrupt", reason))
+            return True
+
+        def play_file(self, path, *, log_tag=""):
+            events.append(("play", path))
+            return True
+
+        def speak(self, text, *, log_tag="", respect_quiet=True):
+            events.append(("speak", text))
+            return True
+
+    monkeypatch.setattr(shell, "ensure_audio_channel", lambda: Chan())
+
+    assert shell.speak_self_talk(text) is True
+
+    assert [kind for kind, _ in events] == ["interrupt", "play"], (
+        "必须先打断上一段再起播，否则上一句会一直念完")
+    assert events[0][1], "打断要带原因：日志里才分得清是连点还是录音"
+
+
+def test_speak_self_talk_interrupts_even_when_it_will_synthesize(tmp_path, monkeypatch):
+    """没缓存要现合成时同样先打断：``speak()`` 会排队，不掐就是"点五下听五句"。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    reasons: list[str] = []
+    played: list[str] = []
+    spoken: list[str] = []
+    monkeypatch.setattr(shell, "ensure_audio_channel",
+                        lambda: _recording_channel(played, spoken, interrupts=reasons))
+
+    assert shell.speak_self_talk("一句还没合过的新台词。") is True
+
+    assert reasons, "起播前必须先掐掉上一段"
+    assert spoken == ["一句还没合过的新台词。"], "没缓存仍要落到在线合成"
 
 
 def test_stop_halts_currently_playing_audio(tmp_path, monkeypatch):

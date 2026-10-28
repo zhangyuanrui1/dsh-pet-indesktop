@@ -99,13 +99,28 @@ class _FakeProvider(tts.TtsProvider):
         Path(out_path).write_bytes(blob[:20] if text in self.truncate else blob)
 
 
+class _FakeFallbackProvider(_FakeProvider):
+    """带 ``is_fallback`` 的后端（对应真实的 edge）：flavor 自成一格。
+
+    与主后端分开是因为两个 provider 的 ``id`` 都进 flavor：同一个 ``voice`` 值在两家
+    名下必须算出两个键，否则这里测不出"到底命中了谁"。
+    """
+
+    id = "fakefb"
+    label = "假备用后端（测试）"
+    is_fallback = True
+
+    def flavor(self, values):
+        return f"fakefb|{values.get('voice') or ''}"
+
+
 @pytest.fixture
 def fake_tts():
     """按需注册假后端；用例结束一律注销，避免污染注册表。"""
     created: list[_FakeProvider] = []
 
-    def make(**kwargs) -> _FakeProvider:
-        provider = _FakeProvider(**kwargs)
+    def make(*, cls=_FakeProvider, **kwargs) -> _FakeProvider:
+        provider = cls(**kwargs)
         tts.register(provider)
         created.append(provider)
         return provider
@@ -307,8 +322,71 @@ def test_precache_names_the_file_after_the_resolved_voice(tmp_path, fake_tts):
     assert provider.calls == [], "同一把嗓子不该因为换了写法再合一遍"
 
 
-# --------------------------------------------------------------- 名单与音色
+# ------------------------------------- 命中只认当前音色（fallback 旧音频不得顶替）
 
+
+def test_find_audio_never_plays_the_fallback_backend_old_voice(tmp_path, fake_tts):
+    """首选后端还没合过这句时，不能拿 fallback（edge）的历史文件顶上。
+
+    真事故：主人选了百炼龙呼呼，点出来却是 edge 晓晓。原先查找范围是**整条**尝试链，
+    于是"哪家有文件就播哪家"——百炼没合过、edge 在旧版本里合过，命中的就是 edge
+    那份；而且从此永远命中旧的，百炼那一版再也不会被合成（面板还说"已配音"）。
+    """
+    primary = fake_tts()
+    backup = fake_tts(cls=_FakeFallbackProvider)
+    cfg = _cfg(tmp_path, backend=primary.id)
+    cfg.set("voice_chime_tts_fallback", True)
+
+    attempts = stv._flavor_attempts(cfg)
+    assert attempts[0].provider == primary.id, "首选后端必须排在最前"
+    backup_attempt = next(a for a in attempts if a.provider == backup.id)
+
+    alt = stv.cache_path_for(cfg.dir, "好女孩……", backup_attempt)
+    alt.parent.mkdir(parents=True, exist_ok=True)
+    alt.write_bytes(_wav())
+
+    assert stv.find_audio(cfg.dir, "好女孩……", cfg) is None, (
+        "备用后端的旧音频不能算「当前音色已配音」")
+    assert stv.find_fallback_audio(cfg.dir, "好女孩……", cfg) == alt, (
+        "但它要能被单独找到：首选后端罢工时才轮得到它兜底")
+
+
+def test_library_snapshot_counts_only_the_current_voice_as_ready(tmp_path, fake_tts):
+    """面板数字必须与耳朵一致：只有备用音色的旧音频 = 待生成（不是已配音）。"""
+    primary = fake_tts()
+    backup = fake_tts(cls=_FakeFallbackProvider)
+    cfg = _cfg(tmp_path, backend=primary.id)
+    cfg.set("voice_chime_tts_fallback", True)
+
+    backup_attempt = next(a for a in stv._flavor_attempts(cfg) if a.provider == backup.id)
+    alt = stv.cache_path_for(cfg.dir, "好女孩……", backup_attempt)
+    alt.parent.mkdir(parents=True, exist_ok=True)
+    alt.write_bytes(_wav())
+
+    snap = stv.library_snapshot(cfg)
+    entry = next(e for e in snap["entries"] if e["text"] == "好女孩……")
+    assert entry["path"] is None, "当前音色没有产物 → 不该报已配音"
+    assert entry["fallback_path"] == alt, "备用音色的旧文件要告知面板"
+    assert snap["ready"] == 0 and snap["missing"] == len(snap["entries"])
+
+
+def test_fallback_audio_is_not_reported_as_an_orphan(tmp_path, fake_tts):
+    """备用后端的产物不算"无用文件"：它还能兜底，别让清理按钮顺手删掉。"""
+    primary = fake_tts()
+    backup = fake_tts(cls=_FakeFallbackProvider)
+    cfg = _cfg(tmp_path, backend=primary.id)
+    cfg.set("voice_chime_tts_fallback", True)
+
+    backup_attempt = next(a for a in stv._flavor_attempts(cfg) if a.provider == backup.id)
+    alt = stv.cache_path_for(cfg.dir, "好女孩……", backup_attempt)
+    alt.parent.mkdir(parents=True, exist_ok=True)
+    alt.write_bytes(_wav())
+
+    snap = stv.library_snapshot(cfg)
+    assert alt not in snap["orphan_paths"]
+
+
+# --------------------------------------------------------------- 名单与音色
 
 def test_collect_lines_includes_bindings_and_dedupes(tmp_path):
     lines = stv.collect_lines(_cfg(tmp_path))
