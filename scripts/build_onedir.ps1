@@ -397,6 +397,7 @@ if (-not $SkipBuild) {
         --collect-all certifi `
         --collect-all PySide6.QtMultimedia `
         --collect-all edge_tts `
+        --collect-all websockets `
         --collect-all aiofiles `
         --collect-all tzdata `
         --collect-all psutil `

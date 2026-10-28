@@ -3379,6 +3379,25 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         callback()
         return True
 
+    def _click_pool(self) -> list[str]:
+        """点击回应池：click/ 素材 + 绑定了台词的其他动画（2026-10-28）。
+
+        「点击动画台词绑定」支持给任意动画绑台词；绑定了非空台词的非点击
+        动画并入本池，点击时同样可能被抽中播放并念出台词（绑定即生效）。
+        绑定表里已不在素材库的名字（角色包换了/绑定过期）过滤掉，绝不
+        起播陌生名。每次点击热读配置：对话框保存后立即生效。
+        """
+        pool = list(self.clicks)
+        try:
+            character = str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
+            extras = self.cfg.click_talk_bound_animations(character)
+        except Exception:  # noqa: BLE001 —— 绑定读取失败不挡点击
+            extras = []
+        if extras:
+            known = set(self.lib.names())
+            pool += [name for name in extras if name not in pool and name in known]
+        return pool
+
     def _on_click(self) -> None:
         """真点击 → 随机一个点击回应动画，并重置当前动画（可连续点击打断）。
 
@@ -3401,7 +3420,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         # 点击可以打断当前动画（包括正在播放的点击回应），实现连续 Q 弹。
         # 先让 Q 弹/动画立刻开始，音效放到下一轮事件循环，避免任何音频
         # 初始化/文件扫描阻塞点击瞬间的画面更新。
-        click_name = self._pick(self.clicks)
+        pool = self._click_pool()
+        click_name = self._pick(pool)
         self._cancel_move()
         self._start_squash()
         self._switch(click_name)

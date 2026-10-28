@@ -1522,6 +1522,10 @@ class OverlayShell(QObject):
         # 唱歌续播判据（window.py:2595-2601）：行为层不查音频，只问这一面。缺它
         # 则唱歌 clip 播完走掷骰链——约 60% 概率被切到随机动作，唱歌循环碎裂。
         host.behavior.sing_continue_provider = lambda: self._music_sing_active
+        # 点击池扩展（2026-10-28）：绑定对话框给任意动画绑台词后，这些动画
+        # 并入点击回应池。按 sprite 各自角色热读绑定配置（主宠/子宠角色可
+        # 不同），保存即生效
+        host.behavior.click_pool_extra_provider = self._click_pool_extras_for_sprite
         host.collision.add_collision_listener(self._on_collision_squash)
         host.collision.add_collision_listener(self._on_collision_probe)
         host.collision.add_collision_listener(self._on_collision_sound)
@@ -1538,6 +1542,20 @@ class OverlayShell(QObject):
         self._wire_host_overlay(host, host.overlay)
         self._connect_host_screen(host)
         self._bind_feeding(host)
+
+    def _click_pool_extras_for_sprite(self, sprite) -> list[str]:
+        """该 sprite 角色的「绑定了台词的动画」名单（点击池扩展，见
+        ``sprite_behavior.BehaviorController.click_pool_extra_provider``）。
+
+        每次点击都现读：``_sprite_config`` 视图转发主配置的绑定表，绑定
+        对话框保存后无需重启即生效。读失败返回空名单（只播 click/ 素材）。
+        """
+        try:
+            cfg = self._sprite_config(sprite) if sprite is not None else self._config
+            character = str(cfg.get("character", catalog.DEFAULT_CHARACTER))
+            return list(cfg.click_talk_bound_animations(character))
+        except Exception:  # noqa: BLE001 —— 扩展名单读取失败不挡点击
+            return []
 
     def _wire_host_overlay(self, host, overlay) -> None:
         """把壳层的窗口回调挂到该宿主的 overlay 上（新建与换屏共用一份清单）。"""

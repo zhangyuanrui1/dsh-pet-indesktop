@@ -32,6 +32,13 @@ lunar-python>=1.4.8
 # 存在动态导入，PyInstaller 静态分析收不全）。
 edge-tts>=7.3.1,<8
 
+# 语音报时百炼后端的萌小姬（qwen3-tts-flash-realtime，2026-10-28 增补）只有
+# WebSocket 实时接口（wss://dashscope.../api-ws/v1/realtime），合成走
+# pet/tts/bailian.py 的 _synthesize_realtime（在 synth 内惰性导入）。缺失时
+# 仅 realtime 模型不可用（龙呼呼/龙泡泡仍走 HTTP），但打包版用户无法自行 pip
+# 安装——所以声明为运行时依赖，并在三个构建脚本里 --collect-all websockets。
+websockets>=13
+
 # —— 歌词显示（可选）——
 # 「显示歌词」功能靠 Windows 系统媒体控制（SMTC）读取当前播放的曲目。
 # 不装不影响桌宠本体：歌词能力探测返回不可用，

@@ -350,6 +350,31 @@ def test_grouping_splits_prefix_families_without_losing_actions():
         _close_all(root)
 
 
+def test_shipped_random_action_pool_uses_semantic_categories():
+    """真实素材包（本仓 shenshen）：随机动作按语义分类分族（上游分类法）。
+
+    2026-10-28 起优先语义分组（小动作/玩耍/吃什么/时节/文字 + 工作状态/碎碎念/
+    余额），语义表对内置素材包全覆盖——「更多」不应出现；族内单桶仍须一屏内。
+    """
+    acts_names = _shipped_action_names()
+    if not acts_names:
+        pytest.skip("shenshen 素材包不在本机（外部 DLC 布局），跳过真实清单断言")
+    pet = _FakePet(acts=acts_names)
+    root = _build_menu(pet)
+    try:
+        acts = _find(_find(root, "播放动画").menu(), "随机动作").menu()
+        families = _family_members(acts)
+        assert set(families) == {
+            "小动作", "玩耍", "吃什么", "时节", "文字", "工作状态", "碎碎念", "余额",
+        }
+        flat = [name for members in families.values() for name in members]
+        assert sorted(flat) == sorted(acts_names), "语义分组不得丢项或重复"
+        for label, members in families.items():
+            assert 0 < len(members) <= MAX_SUBMENU_ITEMS, f"{label} 有 {len(members)} 项"
+    finally:
+        _close_all(root)
+
+
 def test_shipped_random_action_pool_is_grouped_within_one_screen():
     """真实素材包（本仓 shenshen）的随机动作池：分组后每级回到一屏内。"""
     acts_names = _shipped_action_names()

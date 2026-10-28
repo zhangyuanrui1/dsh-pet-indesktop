@@ -147,6 +147,7 @@ for variant in "${variant_list[@]}"; do
         --collect-all certifi
         --collect-all PySide6.QtMultimedia
         --collect-all edge_tts
+        --collect-all websockets
         --collect-all psutil
         --collect-all keyring
         --add-data "$assets:$assets"

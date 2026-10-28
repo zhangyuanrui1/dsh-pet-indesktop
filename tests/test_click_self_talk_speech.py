@@ -209,6 +209,12 @@ def _click_once(*, click_self_talk: bool, periodic: bool, speak_enabled: bool = 
         def _pick(self, sequence):
             return sequence[0]
 
+        def _click_pool(self):
+            """替身版点击池：本组测试只盯台词链路（真实现含绑定扩展，见
+            test_sprite_behavior 的点击池扩展用例）。替身 cfg 没有
+            click_talk_bound_animations，真实现也会因异常回退成 click-only。"""
+            return list(self.clicks)
+
         def _cancel_move(self) -> None:
             pass
 

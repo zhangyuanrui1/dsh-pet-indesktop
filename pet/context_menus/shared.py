@@ -416,6 +416,10 @@ def add_submenu(menu: QMenu, text: str, icon_name: str | None = None) -> QMenu:
 # 系统化（吃* / 工作状态-* / 余额-* / 碎碎念-* / 原地* / 放*），按前缀再分一层
 # 后每级回到一屏内；判定全部来自清单本身（不硬编码字符表），角色包日后新增
 # `乐器-*` 这类前缀会自动成族。
+# 2026-10-28 起分组分两档：优先按**语义分类**（上游 dsh-pet 分类法，表在
+# catalog.ANIMATION_SEMANTIC_CATEGORIES：小动作/玩耍/吃什么/时节/文字 +
+# 工作状态/碎碎念/余额），语义表覆盖不足（别的角色包自创动作名）再退回下面的
+# 前缀家族分组——两条路都保证不丢项、「更多」永远最后。
 ANIMATION_GROUP_RESIDUAL_LABEL = "更多"
 # 家族最少成员数：少于 3 项的"共同前缀"多半只是巧合，不值得多一层菜单。
 ANIMATION_FAMILY_MIN_MEMBERS = 3
@@ -513,6 +517,47 @@ def group_animation_entries(entries) -> tuple[tuple[str, tuple[str, ...]], ...]:
         (label, tuple(members))
         for label, members in sorted(families.items(), key=lambda item: -len(item[1]))
     ]
+    if residual:
+        groups.append((ANIMATION_GROUP_RESIDUAL_LABEL, tuple(residual)))
+    return tuple(groups)
+
+
+def semantic_animation_groups(entries) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """按**语义分类**给随机动作清单分组（上游 dsh-pet 分类法）。
+
+    分类表在 ``catalog.ANIMATION_SEMANTIC_CATEGORIES``（小动作/玩耍/吃什么/
+    时节/文字/工作状态/碎碎念/余额），分类按**表序**排列（固定语义顺序，不按
+    成员数），「更多」永远最后；族内成员保持传入清单的相对顺序。
+
+    返回 ``()`` 表示**不适用**（调用方退回前缀家族分组）：清单太短（同
+    ``group_animation_entries`` 的阈值）、语义表覆盖不到一半（这份清单多半是
+    自创动作的角色包，硬套语义类会把大半动作挤进「更多」——那还不如前缀分组）、
+    或有效分类不足两个（分组没有收益）。
+
+    与前缀分组同一底线：不丢项、不重复——每个名字要么落进某个语义类，要么
+    落进「更多」。
+    """
+    names = [str(name) for name in entries]
+    if len(names) < ANIMATION_GROUP_MIN_ENTRIES:
+        return ()
+    grouped: dict[str, list[str]] = {}
+    residual: list[str] = []
+    for name in names:
+        label = catalog.ANIMATION_SEMANTIC_INDEX.get(name)
+        if label is None:
+            residual.append(name)
+            continue
+        grouped.setdefault(label, []).append(name)
+    covered = sum(len(members) for members in grouped.values())
+    if covered * 2 < len(names) or len(grouped) < 2:
+        return ()
+    groups = [
+        (label, tuple(grouped[label]))
+        for label, _members in catalog.ANIMATION_SEMANTIC_CATEGORIES
+        if grouped.get(label)
+    ]
+    if len(groups) < 2:
+        return ()
     if residual:
         groups.append((ANIMATION_GROUP_RESIDUAL_LABEL, tuple(residual)))
     return tuple(groups)
@@ -646,7 +691,9 @@ def build_animation_categories(
         # 序列就不分组，交给下面的平铺路径（与分组前逐位一致）。
         groups = ()
         if groupable and isinstance(entries, (list, tuple)):
-            groups = group_animation_entries(entries)
+            # 先试语义分类（上游分类法，内置角色包全覆盖）；对不上表再按
+            # 前缀家族分族——两条路互为回退，平铺清单的判定各自把关。
+            groups = semantic_animation_groups(entries) or group_animation_entries(entries)
         if groups:
             for family_label, family_entries in groups:
                 family = add_submenu(submenu, family_label)

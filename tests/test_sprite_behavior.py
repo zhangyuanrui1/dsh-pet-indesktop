@@ -1241,3 +1241,67 @@ def test_categories_cache_invalidates_on_playable_stamp_change():
     cats = c._categories(lib)
     assert cats["turns"] == ["东张西望"], "版本号变了必须重建分类池"
     assert c._categories(lib) is cats, "同一版本要命中缓存（不每次重建）"
+
+
+# ---------------------------------------------------------------- 点击池扩展（台词绑定任意动画，2026-10-28）
+def _library_with_extra_act():
+    """click1 + 一个随机动作池动画（可被台词绑定拉进点击池）。"""
+    lib = _make_library()
+    lib.acts = ["吃西瓜"]
+    lib._clips["吃西瓜"] = FakeClip("吃西瓜", 18)
+    lib.names = lambda: list(lib._clips)
+    return lib
+
+
+def test_click_pool_merges_bound_extras():
+    """绑定了台词的非点击动画并入点击池：抽中它就能点播，陌生名被过滤。"""
+    lib = _library_with_extra_act()
+    sprite = _make_sprite(lib)
+    c = BehaviorController(BOUNDS, rng=ScriptedRng(choices=("吃西瓜",)))
+    c.predict_enabled = False
+    c.click_pool_extra_provider = lambda s: ["吃西瓜", "不存在的动画"]
+    c.tick([sprite], 0.016)                          # 先接管进待机
+    assert c.on_sprite_clicked(sprite) is True
+    assert c.state_of(sprite) == STATE_CLICK
+    assert sprite._clip_name == "吃西瓜"              # 陌生名「不存在的动画」绝不起播
+    assert lib.clip("吃西瓜").start_count == 1
+
+
+def test_click_pool_without_provider_keeps_click_only():
+    """provider 未接线（默认）：行为与旧版一致，只播 click/ 素材。"""
+    lib = _library_with_extra_act()
+    sprite = _make_sprite(lib)
+    c = BehaviorController(BOUNDS, rng=ScriptedRng())
+    c.predict_enabled = False
+    c.tick([sprite], 0.016)
+    assert c.on_sprite_clicked(sprite) is True
+    assert sprite._clip_name == "click1"
+
+
+def test_click_pool_provider_exception_falls_back_to_click_only():
+    """provider 抛异常只降级（不扩展），点击本身照常。"""
+    lib = _library_with_extra_act()
+    sprite = _make_sprite(lib)
+    c = BehaviorController(BOUNDS, rng=ScriptedRng())
+
+    def _boom(_sprite):
+        raise RuntimeError("boom")
+
+    c.predict_enabled = False
+    c.click_pool_extra_provider = _boom
+    c.tick([sprite], 0.016)
+    assert c.on_sprite_clicked(sprite) is True
+    assert sprite._clip_name == "click1"
+
+
+def test_click_pool_library_without_names_filters_all_extras():
+    """素材库实现没有 names()（测试假库口径）：扩展名单整批不生效。"""
+    lib = _library_with_extra_act()
+    del lib.names                                    # 摘掉 names() 模拟老假库
+    sprite = _make_sprite(lib)
+    c = BehaviorController(BOUNDS, rng=ScriptedRng())
+    c.predict_enabled = False
+    c.click_pool_extra_provider = lambda s: ["吃西瓜"]
+    c.tick([sprite], 0.016)
+    assert c.on_sprite_clicked(sprite) is True
+    assert sprite._clip_name == "click1"

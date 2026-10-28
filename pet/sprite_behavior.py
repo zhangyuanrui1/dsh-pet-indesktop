@@ -326,6 +326,12 @@ class BehaviorController:
         # 壳侧接法（一行）：``self.behavior.sing_continue_provider = lambda:
         # self._music_sing_active``
         self.sing_continue_provider = None
+        # 点击池扩展名单（2026-10-28）：callable(sprite) → list[str]，None = 未接线。
+        # 「点击动画台词绑定」支持给任意动画绑台词；壳接线（_wire_host）按 sprite
+        # 返回它角色绑定了非空台词的动画名（主宠/子宠角色可不同，必须逐只取），
+        # on_sprite_clicked 把它们并入点击回应池（素材库里没有的名字再过滤一次）。
+        # 热读配置：绑定对话框保存后下次点击即生效，无需重启。
+        self.click_pool_extra_provider = None
         # 飞行边沿回调（B1，可选）：``callable(sprite, flying) -> None``，只在
         # istate 进出 ``INTERACTION_THROWN`` 的那一 tick 各调一次（首次接管、
         # 空中被抓住、落地、飞行中被移除都算边沿）。行为层只报边沿，气泡语义
@@ -438,7 +444,7 @@ class BehaviorController:
         st = self._states.get(sprite)
         if st is None:
             st = self._states[sprite] = _SpriteState()
-        name = self._pick(cats["clicks"], exclude=st.anim)
+        name = self._pick(self._click_pool(sprite, cats), exclude=st.anim)
         st.state = STATE_CLICK
         st.anim = name
         st.elapsed = 0.0
@@ -449,6 +455,38 @@ class BehaviorController:
         sprite.set_velocity(QPointF(0, 0))
         self._bind_with_gen(sprite, st, name)
         return True
+
+    def _click_pool(self, sprite, cats) -> list[str]:
+        """点击回应池：click/ 素材 + 绑定了台词的其他动画（2026-10-28）。
+
+        扩展名单来自 ``click_pool_extra_provider(sprite)``（壳接线，热读绑定
+        配置，按 sprite 各自角色取）；不在素材库里的名字过滤掉，绝不把陌生名
+        交给 _bind_with_gen。provider 未接线或异常时行为与旧版完全一致
+        （只播 click/ 素材）。
+        """
+        pool = list(cats["clicks"])
+        provider = getattr(self, "click_pool_extra_provider", None)
+        if callable(provider):
+            try:
+                extras = [str(name) for name in (provider(sprite) or [])]
+            except Exception:  # noqa: BLE001 —— 扩展名单读取失败不挡点击
+                extras = []
+            if extras:
+                known = self._library_names(sprite.library)
+                pool += [name for name in extras if name not in pool and name in known]
+        return pool
+
+    @staticmethod
+    def _library_names(library) -> set[str]:
+        """素材库的可播放 clip 名单；实现没有 ``names()``（测试假库）按空集
+        处理——扩展名单宁可整批不生效，也不冒起播陌生 clip 的险。"""
+        names = getattr(library, "names", None)
+        if not callable(names):
+            return set()
+        try:
+            return set(names())
+        except Exception:  # noqa: BLE001
+            return set()
 
     def play_once(self, sprite, name: str) -> bool:
         """一次性播放指定动画，播完回掷骰链（菜单「播放动画」入口，
