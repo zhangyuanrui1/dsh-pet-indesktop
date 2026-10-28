@@ -17,6 +17,7 @@ from pet.chat_reply_voice import (
     MAX_SENTENCE_CHARS,
     ChatReplyReader,
     clean_for_speech,
+    pack_sentences,
     split_sentences,
 )
 
@@ -55,12 +56,14 @@ class FakeClock:
             fn()
 
 
-def _reader(channel: FakeChannel, clock: FakeClock, *, enabled: bool = True) -> ChatReplyReader:
+def _reader(channel: FakeChannel, clock: FakeClock, *, enabled: bool = True,
+            max_chars: int = MAX_SENTENCE_CHARS) -> ChatReplyReader:
     return ChatReplyReader(
         speak=channel.speak,
         channel_idle=channel.channel_idle,
         enabled=lambda: enabled,
         schedule=clock.schedule,
+        max_chars=max_chars,
     )
 
 
@@ -95,10 +98,12 @@ def test_split_sentences_hard_splits_overlong_piece():
 
 
 # --------------------------------------------------------------- 滴灌
+# 这几例验证的是"一句一句送、不一次塞满、忙时不丢"，与合并（pack）无关：
+# 上限压到 6 字，保证 4 字的短句不会被合并成一段，队列仍是多条。
 def test_sends_one_sentence_at_a_time():
     channel = FakeChannel(idle=True)
     clock = FakeClock()
-    reader = _reader(channel, clock)
+    reader = _reader(channel, clock, max_chars=6)
     reader.feed("第一句。第二句。第三句。")
     assert channel.heard == ["第一句。"], "通道空闲时只该送第一句"
     assert reader.pending == 2, "剩下的必须留在队列里，不能一次全塞进去"
@@ -114,7 +119,7 @@ def test_sends_one_sentence_at_a_time():
 def test_busy_channel_keeps_queue_until_idle():
     channel = FakeChannel(idle=False)
     clock = FakeClock()
-    reader = _reader(channel, clock)
+    reader = _reader(channel, clock, max_chars=6)
     reader.feed("第一句。第二句。")
     assert channel.heard == [], "通道忙时不许塞句子"
     assert reader.pending == 2, "忙的时候必须把句子留在队列里（不是丢掉）"
@@ -127,7 +132,7 @@ def test_busy_channel_keeps_queue_until_idle():
 def test_new_reply_replaces_old_queue():
     channel = FakeChannel(idle=False)
     clock = FakeClock()
-    reader = _reader(channel, clock)
+    reader = _reader(channel, clock, max_chars=6)
     reader.feed("旧的甲。旧的乙。")
     assert reader.pending == 2
     reader.feed("新的这一句。")
@@ -179,3 +184,75 @@ def test_lyric_chain_never_wires_reply_voice():
     for name in ("lyric_controller.py", "lyric.py", "now_playing.py"):
         source = (REPO_ROOT / "pet" / "music" / name).read_text(encoding="utf-8")
         assert "chat_reply_voice" not in source, f"{name} 不该接助手回复朗读（只念对话，不念歌词）"
+
+
+# --------------------------------------------------------------- 相邻短句合并（2026-10-28）
+def test_pack_sentences_merges_short_neighbours():
+    """相邻短句合并成一段：这是消除句间停顿的关键（一段音频 = 无拼接点）。"""
+    assert pack_sentences(["甲。", "乙。", "丙。"]) == ["甲。乙。丙。"]
+
+
+def test_pack_sentences_respects_char_limit():
+    """贪心合并但绝不超上限：40 字 + 40 字恰好 80 可合；再多一句就另起一段。"""
+    a, b, c = "甲" * 39 + "。", "乙" * 39 + "。", "丙" * 39 + "。"
+    packed = pack_sentences([a, b, c], max_chars=80)
+    assert packed == [a + b, c]
+
+
+def test_pack_sentences_keeps_order_and_loses_nothing():
+    """保序、不丢字、不重复。"""
+    sentences = ["第一句话。", "第二句话！", "第三句话？", "第四句话。"]
+    packed = pack_sentences(sentences, max_chars=80)
+    assert "".join(packed) == "".join(sentences)
+    assert packed == ["第一句话。第二句话！第三句话？第四句话。"]
+
+
+def test_pack_sentences_keeps_oversized_single():
+    """单句已超上限（hard_split 产物）：原样保留，不与邻居合并。"""
+    long_piece = "啊" * 90
+    assert pack_sentences([long_piece, "短句。"], max_chars=80) == [long_piece, "短句。"]
+
+
+def test_pack_sentences_adds_space_between_ascii_words():
+    """英文句子合并补空格；中文直接相接。"""
+    assert pack_sentences(["Hello.", "World."]) == ["Hello. World."]
+    assert pack_sentences(["你好。", "世界。"]) == ["你好。世界。"]
+
+
+def test_pack_sentences_skips_blank_pieces():
+    assert pack_sentences(["甲。", "   ", "", "乙。"]) == ["甲。乙。"]
+    assert pack_sentences([]) == []
+
+
+def test_two_sentence_reply_is_synthesized_as_one_clip():
+    """机主真实场景：两句话的短回复只送一次合成，中间不再有停顿。
+
+    这句子原来按「？」「！」「……」被切成 3 段，逐段合成→句间各停一下；
+    合并后整条一次合成、一段音频。单独成段的「……」按既有规则丢弃（无文字，
+    不值得为它单跑一次合成），所以合并结果不含它——与旧行为一致。
+    """
+    text = "哼——现在才说？都快一整天没理人家了！……不过我也想你了哦，比你想我多一点～"
+    channel = FakeChannel(idle=True)
+    clock = FakeClock()
+    reader = _reader(channel, clock)
+    reader.feed(text)
+    assert len(channel.heard) == 1, "整条回复应当只送一次合成（一段音频）"
+    assert channel.heard[0] == text.replace("……", "")
+    assert reader.pending == 0
+
+
+def test_long_reply_still_split_into_bounded_segments():
+    """长回复按上限分段：首声不会被拖到整条合完（与合并同一个上限收敛）。"""
+    sentences = ["第%d句话说的是很长很长的一段内容。" % i for i in range(1, 7)]
+    channel = FakeChannel(idle=True)
+    clock = FakeClock()
+    reader = _reader(channel, clock)
+    reader.feed("".join(sentences))
+    heard = list(channel.heard)
+    while reader.pending:
+        channel.idle = True
+        clock.tick()
+        heard = channel.heard
+    assert len(heard) > 1, "超长回复必须分段（不能整条一次合成拖慢首声）"
+    assert all(len(segment) <= MAX_SENTENCE_CHARS for segment in heard)
+    assert "".join(heard) == "".join(sentences)

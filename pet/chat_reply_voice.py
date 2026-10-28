@@ -8,6 +8,10 @@
 * **按句滴灌**：音频通道的待播槽是**深度 1 且新覆盖旧**（为报时设计，见
   ``VoiceChimeService.speak``），因此必须问「现在空闲吗」再发下一句；一次性把三句
   连着 ``speak()`` 进去，前两句会被第三句覆盖，只剩最后一句被念出来。
+* **相邻短句先合并**（2026-10-28）：拆句只用于兜住长度，送合成前把相邻短句按
+  ``MAX_SENTENCE_CHARS`` 贪心拼回一段（``pack_sentences``）。逐段合成时句间必有
+  可闻停顿（每段音频自带头尾静音 + 换源重播），机主人设是 1~2 句短回复，合并后
+  整条只合成一段，段内没有任何拼接点。
 * **不新起通道**：朗读是这条通道的又一个使用者（报时 / 节日 / 点击自言 / 抽签 /
   待办播报之后），结构上不可能叠音。
 * **只念对话，不念歌词**：歌词链与 ``ChatService`` 无交集，本模块也不订阅歌词；
@@ -118,6 +122,46 @@ def split_sentences(text: str, *, max_chars: int = MAX_SENTENCE_CHARS) -> list[s
     return sentences
 
 
+def pack_sentences(sentences: Iterable[str], *, max_chars: int = MAX_SENTENCE_CHARS) -> list[str]:
+    """把相邻短句贪心合并成不超过 ``max_chars`` 的段（保序、不丢字）。
+
+    **为什么合并**（2026-10-28 机主实测）：按句切段逐段合成时，句间总有一段明显
+    停顿——每段音频自带 0.3~0.8s 头尾静音，段与段之间还要停播、换源、重新起播，
+    两者叠加就是"卡一下再说下半句"。预取（提前合成下一段）实测几乎没改善，因为
+    停顿主体不在网络。机主的角色人设是「每次回复 1~2 句、20~40 字」，这类回复合并
+    后**只合成一段**，音频内部没有任何拼接点，停顿从根上消失。
+
+    合并只按长度收敛（默认 80 字，与单句上限同一个量纲），不跨这个上限贪多：
+    长回复仍会被分成若干段（每段 ≤ ``max_chars``），首声延迟不会无限拖长。
+
+    英文句子合并时补一个空格（``Hello.`` + ``World.`` → ``Hello. World.``），
+    中文直接相接（中文标点后不需要空格）。
+    """
+    packed: list[str] = []
+    buffer = ""
+    for sentence in sentences:
+        piece = str(sentence or "").strip()
+        if not piece:
+            continue
+        if not buffer:
+            buffer = piece
+        elif len(buffer) + len(piece) <= max_chars:
+            buffer = _join_for_speech(buffer, piece)
+        else:
+            packed.append(buffer)
+            buffer = piece
+    if buffer:
+        packed.append(buffer)
+    return packed
+
+
+def _join_for_speech(left: str, right: str) -> str:
+    """两段相接：英文/数字（含句末标点）之间补空格，中文直接连。"""
+    if left and right and left[-1].isascii() and right[0].isascii():
+        return f"{left} {right}"
+    return left + right
+
+
 class ChatReplyReader:
     """把一条条 AI 回复拆成句子，串行送进音频通道。
 
@@ -214,10 +258,18 @@ class ChatReplyReader:
 
     # ---------------------------------------------------------------- 数据流
     def feed(self, text: str) -> None:
-        """收到一条完整回复：拆句、替换队列、开始念。"""
+        """收到一条完整回复：拆句 → 合并相邻短句 → 替换队列 → 开始念。
+
+        合并这一步是 2026-10-28 加的：逐段合成时句间停顿明显（音频头尾静音 +
+        播放器换源），而人设是 1~2 句短回复，合并后整条只合成一段，停顿消失。
+        合并上限与单句上限同为 ``max_chars``，长回复照旧分段落。
+        """
         if not self.enabled:
             return
-        sentences = split_sentences(text, max_chars=self._max_chars)
+        sentences = pack_sentences(
+            split_sentences(text, max_chars=self._max_chars),
+            max_chars=self._max_chars,
+        )
         if not sentences:
             return
         # 新回复覆盖旧队列：上一轮还没念完的内容直接作废（与通道"新覆盖旧"同口径，
