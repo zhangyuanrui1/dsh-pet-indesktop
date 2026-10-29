@@ -23,6 +23,17 @@ def _no_desktop_by_default(monkeypatch):
     monkeypatch.setattr(hl, "desktop_process_running", lambda: False)
 
 
+@pytest.fixture(autouse=True)
+def _redirect_spawn_logs(tmp_path, monkeypatch):
+    """spawn 日志目录重定向到 tmp：_spawn 用例不落真实用户日志、不删真实文件
+    （吞错修复后 _spawn 会把子进程输出写进日志文件并按保留上限清理旧文件）。"""
+    from pet import harness_launcher as hl
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True)
+    monkeypatch.setattr(hl, "_spawn_log_dir", lambda: log_dir)
+
+
 def test_harness_port_probe():
     server = socket.socket()
     server.bind(("127.0.0.1", 0))

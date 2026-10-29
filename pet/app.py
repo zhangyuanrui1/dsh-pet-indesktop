@@ -2779,6 +2779,10 @@ class AppShell:
         self._install_config_watcher()
         QTimer.singleShot(3500, self.instance._check_autostart_wanted)
         QTimer.singleShot(4000, self._maybe_autostart_harness)
+        # dsh web 常驻看护：事件监听 + 单例看护线程（只看自拉起实例，门复核每轮做）。
+        # 与自启解耦：看护线程常驻但门关时只观察不拉起，装这里保证手动启动的
+        # 实例意外退出时用户也能收到气泡、门开时服务能被救活。
+        self._install_harness_supervisor()
         # 启动时补一次：点击动画绑定对话框不走设置页保存信号，改动要等下次启动才被
         # 发现（合成一句约 20 秒，放晚一点，别和首帧/动画预热抢资源）。
         QTimer.singleShot(9000, self._precache_self_talk_voice_on_start)
@@ -3303,6 +3307,64 @@ class AppShell:
 
         threading.Thread(target=_run, daemon=True, name="pet-harness-autostart").start()
 
+    def _install_harness_supervisor(self) -> None:
+        """dsh web 常驻看护：随桌宠常驻的单例线程 + 运行事件气泡。
+
+        看护线程在 harness_launcher 模块内（纯逻辑、不碰 GUI），这里只做三件事：
+        注册事件监听（exited / supervisor-restarted / supervisor-failed → 气泡）、
+        注入功能门（复用 ``_harness_autostart_wanted`` + 退出/会话结束标记）、
+        启动单例线程。吞错 bug 的教训是「启动失败全程静默」：进程早退现在会
+        经事件通道弹气泡（含日志路径），看护再把服务救活（用户主动停过除外）。
+        """
+        try:
+            from . import harness_launcher as harness_mod
+        except ImportError:
+            return  # 无 harness 模块的裁剪构建：整块跳过
+        # 气泡必须回 GUI 线程；事件从 daemon 线程发出，经 singleShot(context)
+        # 转投——context 用长命对象，避免回调投递到已析构的桥（同 launch_harness_gui
+        # 的 bridge 持活手法）。AppShell 不是 QObject，桥做独立对象并挂在 self
+        # 上持活（随壳存亡，不做 Qt 父子）。
+        bridge = QObject()
+        self._harness_status_bridge = bridge
+
+        def _on_status(event: str, info: str) -> None:
+            win = getattr(self, "win", None)
+            if win is None:
+                return
+            text = {
+                "exited": (
+                    "dsh web 进程已退出（可能启动失败）。"
+                    f"日志：{info}" if info else "dsh web 进程已退出（可能启动失败）。"
+                ),
+                "supervisor-restarted": "dsh web 意外退出，已自动重新拉起服务。",
+                "supervisor-failed": f"dsh web 自动重启失败：{info}",
+            }.get(event)
+            if not text:
+                return
+            QTimer.singleShot(0, bridge, lambda: win.show_bubble(text, duration_ms=8000))
+
+        try:
+            harness_mod.add_status_listener(_on_status)
+        except Exception:
+            logging.exception("注册 dsh 运行事件监听失败")
+            return
+
+        def _wanted() -> bool:
+            # 门 = 自启功能门 + 非退出 + 非会话结束（看护绝不与退出收口赛跑）
+            return (
+                not getattr(self, "_quitting", False)
+                and not getattr(self, "_session_end_done", False)
+                and self._harness_autostart_wanted()
+            )
+
+        try:
+            started = harness_mod.start_supervisor(_wanted)
+        except Exception:
+            logging.exception("启动 dsh 常驻看护失败")
+            return
+        if started:
+            logging.info("dsh 常驻看护已启动（随桌宠常驻）")
+
     def _harness_autostart_wanted(self) -> bool:
         """「随桌宠启动 dsh 服务」的功能门：三个条件同时成立才自动拉起。
 
@@ -3493,6 +3555,14 @@ class AppShell:
         # 节日提醒同为进程级懒服务，退出必须一并停（理由同 voice_chime_service）。
         if self.festival_service is not None:
             self.festival_service.stop()
+        # 常驻看护先停：退出收口要杀自拉起实例，看护若还在轮询，杀完的下一轮
+        # tick 可能赶在退出完成前把它当「意外退出」重新拉起——与退出语义对着干。
+        # 线程虽是 daemon，但这里显式停掉才不赌时序。
+        try:
+            from . import harness_launcher as _harness_mod
+            _harness_mod.stop_supervisor()
+        except Exception:
+            logging.debug("停止 dsh 常驻看护失败（忽略）", exc_info=True)
         # 退出收口：停掉本进程自拉起的 dsh web（父进程退出不带走 CREATE_NO_WINDOW
         # 的子进程，实机确认桌宠退出后 node 仍活着——只能由宿主自己收）。
         # 只杀自拉起登记表里且命令行复核通过的那个：用户手动起的实例不受影响。

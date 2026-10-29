@@ -66,6 +66,15 @@ def _clean_self_launched_registry():
 
 
 @pytest.fixture(autouse=True)
+def _redirect_spawn_logs(tmp_path, monkeypatch):
+    """spawn 日志目录重定向到 tmp：本文件的 _spawn 用例不落真实用户日志，
+    也不触发清理逻辑对真实文件的删除（吞错修复后 _spawn 会写日志文件）。"""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True)
+    monkeypatch.setattr(hl, "_spawn_log_dir", lambda: log_dir)
+
+
+@pytest.fixture(autouse=True)
 def _no_desktop_boundary(monkeypatch):
     """本文件全部用例钉 web 路径：桌面端安装 / 运行探测是机器相关的 OS 边界。
 

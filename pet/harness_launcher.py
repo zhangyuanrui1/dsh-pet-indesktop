@@ -264,12 +264,132 @@ def _probe_cache_path() -> Path:
     return base / app_dir / "harness_probe_cache.json"
 
 
+def _spawn_log_dir() -> Path:
+    """自拉起子进程输出日志的目录（桌宠数据目录下 logs/）。"""
+    try:
+        from . import config as _config_mod
+        app_dir = str(getattr(_config_mod, "APP_DIR_NAME", "dsh-pet-standalone"))
+    except Exception:
+        app_dir = "dsh-pet-standalone"
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    return base / app_dir / "logs"
+
+
+# 每份日志是「一次 spawn」的完整生命周期；历史诊断价值随时间衰减，保留少量即可
+_SPAWN_LOG_KEEP = 5
+
+
+def _new_spawn_log() -> Path | None:
+    """为本轮 spawn 新建一个带时间戳的日志文件，返回路径（失败返回 None）。
+
+    为什么按次分文件而不是单个追加：吞错 bug 的教训是 DEVNULL 把 dsh 的启动
+    报错全吞了，端口永远起不来而用户只看到「正在后台启动……」。按次分文件
+    让每次启动的错误各自可考，也不用做跨进程追加的交错处理。
+    """
+    try:
+        log_dir = _spawn_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        path = log_dir / f"dsh-web-{stamp}.log"
+        serial = 0
+        while path.exists():  # 同一秒内多次 spawn（测试/重试）：不覆盖
+            serial += 1
+            path = log_dir / f"dsh-web-{stamp}-{serial}.log"
+        path.touch()  # 先认领文件名：同秒并发不会撞名，列表里也立即可见
+        # 只留最近 _SPAWN_LOG_KEEP 份，早于本次的按名字序删旧的
+        olds = sorted(log_dir.glob("dsh-web-*.log"))
+        for old in olds[:-_SPAWN_LOG_KEEP] if len(olds) >= _SPAWN_LOG_KEEP else []:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        return path
+    except Exception:
+        return None
+
+
+# ------------------------------------------------------------------ 状态通知
+# spawn 侧（worker 线程 / 退出监视线程 / 常驻看护线程）向宿主（AppShell）回报
+# 运行事件的单向通道：宿主注册回调弹气泡，本模块不 import 任何 GUI。
+# 事件契约（event, info）：
+# - "exited"               自拉起的 dsh web 进程退出（启动失败/崩溃）；info=日志路径
+# - "supervisor-restarted" 看护已把意外退出的 dsh web 重新拉起；info=url 或 "desktop"
+# - "supervisor-failed"    看护重启失败；info="status: info"
+_STATUS_LISTENERS: list = []
+_STATUS_LISTENERS_LOCK = threading.Lock()
+
+
+def add_status_listener(callback) -> None:
+    """注册运行事件回调 ``callback(event: str, info: str)``（幂等）。"""
+    with _STATUS_LISTENERS_LOCK:
+        if callback not in _STATUS_LISTENERS:
+            _STATUS_LISTENERS.append(callback)
+
+
+def remove_status_listener(callback) -> None:
+    with _STATUS_LISTENERS_LOCK:
+        try:
+            _STATUS_LISTENERS.remove(callback)
+        except ValueError:
+            pass
+
+
+def _notify_status(event: str, info: str = "") -> None:
+    """向全部监听者广播事件；单个回调异常不传染（回调在别人的线程里跑）。"""
+    with _STATUS_LISTENERS_LOCK:
+        listeners = list(_STATUS_LISTENERS)
+    for callback in listeners:
+        try:
+            callback(event, info)
+        except Exception:
+            logging.debug("dsh 状态监听回调失败 event=%s", event, exc_info=True)
+
+
+# 主动终止过的 pid：退出监视线程看到它们死亡时**不**发 "exited"——
+# 用户/收口亲手停掉的服务不是「意外退出」，弹「可能启动失败」是误报。
+_EXIT_NOTIFY_SUPPRESSED: set[int] = set()
+_EXIT_NOTIFY_SUPPRESSED_LOCK = threading.Lock()
+
+
+def _suppress_exit_notify(pid: int) -> None:
+    if isinstance(pid, int) and pid > 0:
+        with _EXIT_NOTIFY_SUPPRESSED_LOCK:
+            _EXIT_NOTIFY_SUPPRESSED.add(pid)
+
+
+def _watch_spawned_exit(proc, log_path: Path | None) -> None:
+    """自拉起 web 进程的退出监视线程（daemon）：死亡且未被抑制时广播 "exited"。
+
+    身份绑定在 **Popen 句柄**上（不是数字 pid）：wait 返回的就是我们 spawn 的
+    那个进程，不存在 pid 复用误报。替身/测试环境没有 ``wait`` 时静默放弃——
+    监视是增值路径，绝不能因为它炸掉启动主流程。
+    """
+    try:
+        proc.wait()
+    except Exception:
+        return
+    pid = getattr(proc, "pid", None)
+    with _EXIT_NOTIFY_SUPPRESSED_LOCK:
+        suppressed = pid in _EXIT_NOTIFY_SUPPRESSED if isinstance(pid, int) else False
+        if suppressed:
+            _EXIT_NOTIFY_SUPPRESSED.discard(pid)
+    if suppressed:
+        return
+    log = str(log_path) if log_path is not None else ""
+    logging.warning("自拉起的 dsh web 进程已退出（可能启动失败）pid=%s 日志=%s", pid, log or "（无）")
+    _notify_status("exited", log)
+
+
 def _dsh_version(base_command: list[str]) -> str | None:
     """快速取 dsh 版本（--version 不加载插件栈，秒回；失败返回 None）。"""
     try:
         result = subprocess.run(
             [*base_command, "--version"],
             capture_output=True, text=True, timeout=8,
+            encoding="utf-8", errors="replace",  # npx 输出含 UTF-8 字符（如 ¥），GBK 默认解码会炸线程
             cwd=str(Path.home()),
             env={**os.environ, "PATH": _augmented_path()},
             **_HIDDEN_KWARGS,
@@ -322,6 +442,7 @@ def _probe_no_open(base_command: list[str]) -> tuple[bool, bool]:
             [*base_command, "web", "--help"],
             capture_output=True,
             text=True,
+            encoding="utf-8", errors="replace",  # 同上：防 GBK 解码崩溃
             timeout=30,
             cwd=str(Path.home()),
             env={**os.environ, "PATH": _augmented_path()},
@@ -377,6 +498,7 @@ def _npm_global_roots() -> list[Path]:
         try:
             result = subprocess.run(
                 [npm, "root", "-g"], capture_output=True, text=True, timeout=15,
+                encoding="utf-8", errors="replace",  # 同上：防 GBK 解码崩溃
                 env={**os.environ, "PATH": _augmented_path()},
                 **_HIDDEN_KWARGS,
             )
@@ -500,7 +622,7 @@ def _child_for(pid: int):
     return None
 
 
-def _spawn(command: list[str]) -> None:
+def _spawn(command: list[str]) -> subprocess.Popen | None:
     """后台拉起进程：Windows 隐藏控制台窗口；POSIX 新会话脱离终端。
 
     Windows 只用 CREATE_NO_WINDOW（隐藏窗口但保留隐藏控制台，子进程的
@@ -508,13 +630,22 @@ def _spawn(command: list[str]) -> None:
     两者组合的语义冲突实测会弹出可见 cmd 窗口，用户关窗即杀整树。
     隐藏控制台的子进程不随父进程退出而被杀，无需 DETACHED 脱离。
 
+    stdout/stderr **不再进 DEVNULL**（吞错 bug 修复）：落到带时间戳的日志
+    文件（``_new_spawn_log``）。dsh 启动失败（凭据文件坏、插件栈崩、端口
+    冲突等）过去全部静默，GUI 只会一直说「正在后台启动……」而端口永远
+    不起——现在错误留在日志里，进程早退时还会经退出监视线程广播给宿主
+    弹气泡（含日志路径）。
+
     macOS 上 Finder 启动的 .app 环境 PATH 极简：dsh/npx 是带 shebang
     （/usr/bin/env node）的 shell 脚本，执行时用的是**子进程环境**的 PATH，
     而非 _which 用的增强 PATH——不注入增强 PATH 会静默失败
     （env: node: No such file or directory，45 秒后无反应）。
 
     起成功后把 pid 记进自拉起登记表：桌宠退出不会带走这个子进程，收口
-    （``stop_self_launched_harness``）只认这里记下的身份。
+    （``stop_self_launched_harness``）只认这里记下的身份。同时启动退出
+    监视线程（仅 web 类：desktop 是用户的主力应用，正常关闭不该报警）。
+
+    返回 Popen 句柄（spawn 失败的 OSError 由调用方接；拿不到句柄返回 None）。
     """
     kwargs: dict = {
         "cwd": str(Path.home()),  # dsh 以调用目录为默认工作区，用家目录保持中性
@@ -523,12 +654,30 @@ def _spawn(command: list[str]) -> None:
         "stderr": subprocess.DEVNULL,
         "env": {**os.environ, "PATH": _augmented_path()},
     }
+    log_path = _new_spawn_log()
+    log_handles: list = []
+    if log_path is not None:
+        try:
+            fh = open(log_path, "wb")
+            kwargs["stdout"] = fh
+            kwargs["stderr"] = fh
+            log_handles.append(fh)
+        except OSError:
+            log_path = None  # 日志开不出来不是失败理由：退回 DEVNULL 照常拉起
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     else:
         kwargs["start_new_session"] = True
     _reap_children()
-    proc = subprocess.Popen(command, **kwargs)
+    try:
+        proc = subprocess.Popen(command, **kwargs)
+    finally:
+        # 子进程已继承句柄，父进程这份用完即弃（不关会漏到进程退出）
+        for fh in log_handles:
+            try:
+                fh.close()
+            except OSError:
+                pass
     if isinstance(proc, _POPEN_TYPE):
         # 两条登记同进同出（R2 修复）：「pid 有登记 ⇒ 句柄有登记」的不变量
         # 是 G3 身份门槛的前提，任何替身/补丁环境下都不许拆开。
@@ -537,6 +686,13 @@ def _spawn(command: list[str]) -> None:
         with _OWNERSHIP_LOCK:
             _LAUNCHED_CHILDREN.append(proc)
             _record_self_launched(getattr(proc, "pid", None))
+    # 退出监视线程对**所有** spawn 挂（不限于真 Popen）：替身没有 wait 时
+    # 监视线程自己放弃（见 _watch_spawned_exit），主流程不受影响。
+    threading.Thread(
+        target=_watch_spawned_exit, args=(proc, log_path),
+        daemon=True, name="pet-harness-exit-watch",
+    ).start()
+    return proc
 
 
 def _spawn_desktop(exe: Path) -> None:
@@ -635,12 +791,15 @@ def launch_harness(port: int = DEFAULT_PORT, *, open_browser: bool = True,
     if cancel_check is not None and cancel_check():
         return "aborted", url
     try:
-        _spawn(command)
+        proc = _spawn(command)
     except OSError as exc:
         return "error", str(exc)
+    # 显式启动成功：清「用户主动停止」闩（常驻看护恢复职责；见 supervisor 注释）
+    _clear_user_stop()
 
     if "--no-open" not in command:
-        # 未传 --no-open：dsh 会自己打开浏览器，桌宠不再重复打开
+        # 未传 --no-open：dsh 自己打开浏览器，桌宠不重复打开。
+        # 进程早退由 _spawn 挂的退出监视线程广播（"exited"），这里无需重复盯。
         return "started", url
 
     if not open_browser:
@@ -649,6 +808,13 @@ def launch_harness(port: int = DEFAULT_PORT, *, open_browser: bool = True,
     def _wait_and_open() -> None:
         deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
+            # 进程已死就别再干等端口：吞错 bug 的观感（「正在启动……」挂满
+            # 90 秒毫无下文）一半来自这里——退出监视线程会广播含日志路径的
+            # "exited" 事件给宿主弹气泡，本线程直接放弃即可。句柄判死绑定
+            # 的是我们 spawn 的那个进程，无 pid 复用问题；替身无 poll 时跳过。
+            poll = getattr(proc, "poll", None)
+            if callable(poll) and poll() is not None:
+                return
             if is_running(port):
                 webbrowser.open(url)
                 return
@@ -1064,6 +1230,8 @@ def stop_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
                 return "error", f"终止 PID {pid} 失败：{exc}"
             if not ok:
                 return "error", f"终止 PID {pid} 失败（终止命令未成功，详见日志）"
+            # 用户确认过的终止：常驻看护不得复活它（显式启动才清闩）
+            _mark_user_stop()
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline and is_running(candidate):
                 time.sleep(0.05)
@@ -1172,6 +1340,10 @@ def _stop_self_launched_harness_inner() -> list[int]:
             continue
         _forget_self_launched(pid)
         terminated.append(pid)
+        # 收口路径的终止同样是「主动停止」：联动关闭/退出收口杀掉的实例，
+        # 常驻看护不得在下一轮又拉起来（门关时看护本来就不动，闩是双保险——
+        # 门重开后也不自动复活，与旧语义一致）。
+        _mark_user_stop()
     if terminated:
         logging.info("已停止自拉起的 dsh web：PID %s", terminated)
     return terminated
@@ -1185,6 +1357,150 @@ def restart_harness(port: int = DEFAULT_PORT, *, open_browser: bool = True) -> t
     # 同 GUI 的「重启服务」：重启的是 web 服务进程，不跟随 harness_launch_target
     # （跟随会让装了桌面端的机器重启出桌面端，或直接报「桌面端已在运行」）。
     return launch_harness(port, open_browser=open_browser, target="web")
+
+
+# ------------------------------------------------------------------ 常驻看护
+# 「随桌宠常驻」的正式方案（吞错 bug 的后续）：桌宠活着期间，由一个单例
+# daemon 线程周期检查**自拉起的** dsh web 是否还活着；意外退出且「门」仍开
+# 时自动按退避重启。三条纪律：
+#
+# 1. **只看自拉起的**：用户自己在终端跑的实例崩溃了不归我们管（登记表为空
+#    就没有「我们的进程」），端口被任何人占着也不重复拉起（is_running 兜底）。
+# 2. **不跟用户的明确决定对着干**：托盘「停止服务」/ 联动关闭收口终止过
+#    实例后置「用户停止」闩（``_mark_user_stop``），看护不再复活；下一次
+#    显式 launch（菜单启动/自启/重启）成功 spawn 才清闩。这与旧语义一致
+#    （联动关闭后重开也不自动重拉，需用户手动启动），只是把行为显式化了。
+# 3. **门复核每轮都做**：``get_wanted``（宿主注入：非退出 + 联动开 + 自启开）
+#    关闭期间只观察不拉起——门是看护的行为边界，不是一次性快照。
+#
+# 重启走 ``target="service"``（headless）：看护的职责是把**服务**救活，不是
+# 替用户开界面；命令带 --no-open（探测不到则靠 dsh 旧版行为，见 launch_harness
+# docstring 的遗留限制）。
+
+_SUPERVISOR_LOCK = threading.Lock()
+_SUPERVISOR_THREAD: threading.Thread | None = None
+_SUPERVISOR_STOP = threading.Event()
+
+# 用户主动停止闩（读写都走 _OWNERSHIP_LOCK，与登记表同锁）
+_USER_STOPPED = False
+
+# 崩溃循环退避：连续重启失败翻倍，上限 5 分钟；进程**活着**被看护看到时清零
+_SUPERVISOR_FAILURES = 0
+_NEXT_RESTART_AT = 0.0
+_SUPERVISOR_RESTART_BASE_SECONDS = 20.0
+_SUPERVISOR_RESTART_MAX_SECONDS = 300.0
+
+
+def _mark_user_stop() -> None:
+    """记录一次「用户/收口主动终止 dsh」：看护从此不再复活，直到显式启动。"""
+    global _USER_STOPPED
+    with _OWNERSHIP_LOCK:
+        _USER_STOPPED = True
+
+
+def _clear_user_stop() -> None:
+    global _USER_STOPPED
+    with _OWNERSHIP_LOCK:
+        _USER_STOPPED = False
+
+
+def _supervisor_tick(get_wanted, port: int = DEFAULT_PORT) -> str:
+    """看护单步：检查现状并在需要时重启。返回动作标签（测试/日志用）。
+
+    - "alive"      自拉起的 web 进程仍活着（顺带清零退避计数）
+    - "listening"  配置端口有人监听（用户自己的实例/别的 dsh）：不重复拉起
+    - "gated"      门关闭（联动关/自启关/退出中）：只观察
+    - "stopped"    用户主动停止闩在位：不复活
+    - "backoff"    退避窗口内：本轮跳过
+    - "restarted"  已重新拉起（广播 "supervisor-restarted"）
+    - "failed"     重启失败（广播 "supervisor-failed"，退避翻倍）
+    """
+    global _SUPERVISOR_FAILURES, _NEXT_RESTART_AT
+    _reap_children()
+    with _OWNERSHIP_LOCK:
+        web_pids = [
+            pid for pid in _SELF_LAUNCHED_PIDS
+            if _SELF_LAUNCHED_KIND.get(pid) != "desktop"
+        ]
+    for pid in web_pids:
+        child = _child_for(pid)
+        if child is not None and child.poll() is None:
+            _SUPERVISOR_FAILURES = 0  # 存活被看到：崩溃循环退避清零
+            return "alive"
+    if is_running(port):
+        # 端口有人：无论是不是我们的进程，服务都在，不需要看护动手
+        return "listening"
+    try:
+        wanted = bool(get_wanted())
+    except Exception:
+        logging.exception("看护门复核失败，本轮按不需要处理")
+        return "gated"
+    if not wanted:
+        return "gated"
+    with _OWNERSHIP_LOCK:
+        stopped = _USER_STOPPED
+    if stopped:
+        return "stopped"
+    now = time.monotonic()
+    if now < _NEXT_RESTART_AT:
+        return "backoff"
+    status, info = launch_harness(
+        port=port, open_browser=False, target="service",
+        cancel_check=lambda: not get_wanted_safe(get_wanted),
+    )
+    if status == "started":
+        _notify_status("supervisor-restarted", info)
+        return "restarted"
+    if status in ("already", "aborted"):
+        # already：探测与拉起之间端口被占上了（有人先起好）——无需动作；
+        # aborted：cancel_check 命中（门在慢探测期间翻转）——回门口等下轮。
+        return "listening" if status == "already" else "gated"
+    _SUPERVISOR_FAILURES += 1
+    delay = min(
+        _SUPERVISOR_RESTART_BASE_SECONDS * (2 ** min(_SUPERVISOR_FAILURES - 1, 5)),
+        _SUPERVISOR_RESTART_MAX_SECONDS,
+    )
+    _NEXT_RESTART_AT = time.monotonic() + delay
+    _notify_status("supervisor-failed", f"{status}: {info}")
+    return "failed"
+
+
+def get_wanted_safe(get_wanted) -> bool:
+    """cancel_check 用的门包装：门函数炸了按「不想要」处理（宁可不拉起）。"""
+    try:
+        return bool(get_wanted())
+    except Exception:
+        return False
+
+
+def start_supervisor(get_wanted, port: int = DEFAULT_PORT, interval: float = 10.0) -> bool:
+    """启动常驻看护线程（幂等；已有实例在跑返回 False）。
+
+    ``get_wanted()``：宿主注入的功能门，每轮 tick 与每次重启前都复核。
+    线程 daemon：桌宠主线程退出不依赖它收尾（退出路径会显式 ``stop_supervisor``）。
+    """
+    global _SUPERVISOR_THREAD
+    with _SUPERVISOR_LOCK:
+        if _SUPERVISOR_THREAD is not None and _SUPERVISOR_THREAD.is_alive():
+            return False
+        _SUPERVISOR_STOP.clear()
+
+        def _loop() -> None:
+            while not _SUPERVISOR_STOP.wait(interval):
+                try:
+                    _supervisor_tick(get_wanted, port)
+                except Exception:
+                    logging.exception("dsh 常驻看护 tick 失败（下轮重试）")
+
+        _SUPERVISOR_THREAD = threading.Thread(
+            target=_loop, daemon=True, name="pet-harness-supervisor")
+        _SUPERVISOR_THREAD.start()
+        return True
+
+
+def stop_supervisor() -> None:
+    """停掉常驻看护线程（退出路径专用；不 join——daemon 线程自然消亡）。"""
+    _SUPERVISOR_STOP.set()
 
 
 def launch_harness_gui(parent=None, action: str = "start", target: str = "auto") -> None:
