@@ -8,7 +8,7 @@
   不同角色记不同人格事实；多实例经 SessionStore 的实例后缀目录天然隔离）；
 - 结构：`{version, entries: [{id, text, source, layer, keywords, created_at,
   updated_at, hits}]}`；老条目缺 `layer` 读取即 `fact`、缺 `keywords` 现场 bigram
-  兜底（**不迁移、不改写老文件**）；新条目在头部；上限 100 条 / 4000 字符，
+  兜底（**不迁移、不改写老文件**）；新条目在头部；上限 200 条 / 8000 字符，
   超限按 hits 少 + 最老淘汰；
 - 四层：`user` 恒定注入；`fact/lesson/topic` 第二轮起按需命中；topic 连续 14 天
   未命中自动归档（`archived`，不参与命中，UI 可恢复）；
@@ -82,8 +82,10 @@ from .session_store import SessionStore
 log = logging.getLogger(__name__)
 
 #: 条目数 / 总字符 / 单条字符上限（设计稿 §3：超限按 hits 少 + 最老淘汰）。
-MAX_ENTRIES = 100
-MAX_TOTAL_CHARS = 4000
+#: 2026-10-29 容量抬升（用户确认）：100/4000 → 200/8000，只给「存得下」的余量；
+#: 注入侧（USER_CHAR_LIMIT / INJECT_CHAR_LIMIT）**未动**，多出来的条目不会进 prompt。
+MAX_ENTRIES = 200
+MAX_TOTAL_CHARS = 8000
 MAX_ENTRY_CHARS = 500
 #: 注入段的硬字符上限（设计稿 §4：条列，带字符上限，超出按 hits/时间截）。
 INJECT_CHAR_LIMIT = 1200

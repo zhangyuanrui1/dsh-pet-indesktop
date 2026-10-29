@@ -217,11 +217,14 @@ def test_apply_ops_noop_does_not_rewrite_file(tmp_path):
 
 
 def test_add_dedup_refresh_enforces_budget(tmp_path):
-    """v2f L5：盘上 12 条共 6000 字符时，去重刷新也要收敛到 4000 预算内。"""
+    """v2f L5：盘上条目总字符超预算时，去重刷新也要收敛到 MAX_TOTAL_CHARS 内。"""
     path = tmp_path / "memory.json"
     base = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
-    texts = [f"{index:02d}-" + "长" * 497 for index in range(12)]
-    assert sum(len(text) for text in texts) == 6000
+    entry_chars = 500
+    # 固定「超预算 4 条」，与 MAX_TOTAL_CHARS 解耦：预算调大调小这条用例都还超限。
+    count = MAX_TOTAL_CHARS // entry_chars + 4
+    texts = [f"{index:02d}-" + "长" * (entry_chars - 3) for index in range(count)]
+    assert sum(len(text) for text in texts) > MAX_TOTAL_CHARS
     path.write_text(
         json.dumps(
             {
@@ -249,7 +252,7 @@ def test_add_dedup_refresh_enforces_budget(tmp_path):
     entries = mem.load()
     assert texts[0] in {entry["text"] for entry in entries}
     assert sum(len(entry["text"]) for entry in entries) <= MAX_TOTAL_CHARS
-    assert len(entries) == 8  # 12 × 500 → 8 × 500
+    assert len(entries) == MAX_TOTAL_CHARS // entry_chars  # 受保护的新条目也在其中
 
 
 def test_note_recalled_hit_increments_persisted_hits(tmp_path):

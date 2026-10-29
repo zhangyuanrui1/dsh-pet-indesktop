@@ -39,7 +39,7 @@ from ..settings_widgets import (
     SettingRow,
     SettingsCard,
 )
-from .memory import LAYERS, ChatMemory, layer_of, memory_path
+from .memory import LAYERS, MAX_ENTRIES, MAX_TOTAL_CHARS, ChatMemory, layer_of, memory_path
 from .memory_recall import LAYER_LABELS, is_archived
 from .themes import CHAT_UI_STYLE_LABELS, CHAT_UI_VIEW_ASPECT, theme_names
 from .utils import _safe_emit
@@ -329,7 +329,7 @@ class _AiSettingsPage(QWidget):
             ),
             SettingRow(
                 "chat_memory_manage", "记忆管理",
-                "按角色保存在本地（最多 100 条 / 4000 字），按四层分组；可单条改层、"
+                f"按角色保存在本地（最多 {MAX_ENTRIES} 条 / {MAX_TOTAL_CHARS} 字），按四层分组；可单条改层、"
                 "删除、恢复已归档的话题，或一键清空全部四层。",
                 self.chat_memory_manage_btn,
             ),
@@ -1095,7 +1095,7 @@ class ChatMemoryDialog(QDialog):
                 self._rows.append(row)
         self.host_layout.addStretch(1)
         self.count_label.setText(
-            f"共 {total} 条（上限 100 条 / 4000 字）" if total else "")
+            f"共 {total} 条（上限 {MAX_ENTRIES} 条 / {MAX_TOTAL_CHARS} 字）" if total else "")
         self.clear_btn.setEnabled(total > 0)
 
     def _entry_row(self, entry: dict, layer: str, now: datetime) -> QWidget:
