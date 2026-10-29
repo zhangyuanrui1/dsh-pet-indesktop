@@ -264,7 +264,7 @@ _SOURCE_SWITCHES = (
 
 
 def local_music_rows(dialog) -> list[SettingRow]:
-    """「本地点歌」组的三行（由「桌宠 · 音乐关联」组直接取用，不走 claim）。"""
+    """「本地点歌」组的四行（由「桌宠 · 音乐关联」组直接取用，不走 claim）。"""
     rows: list[SettingRow] = [
         SettingRow(
             "local_music_dir",
@@ -294,11 +294,21 @@ def local_music_rows(dialog) -> list[SettingRow]:
                 volume_spin,
             )
         )
+    bubble_check = getattr(dialog, "local_music_bubble_lyrics_check", None)
+    if bubble_check is not None:
+        rows.append(
+            SettingRow(
+                "local_music_bubble_lyrics",
+                "歌词气泡",
+                "点歌播放时在桌宠头顶气泡滚动显示当前歌词（读取歌曲文件夹里的 .lrc，不联网）。",
+                bubble_check,
+            )
+        )
     return rows
 
 
 def save_local_music_settings(dialog) -> None:
-    """写回本地点歌三键。控件不存在就整键跳过（与来源开关同一口径）。"""
+    """写回本地点歌四键。控件不存在就整键跳过（与来源开关同一口径）。"""
     picker = getattr(dialog, "local_music_dir_picker", None)
     if picker is not None:
         dialog.config.set("local_music_dir", picker.text().strip())
@@ -308,6 +318,9 @@ def save_local_music_settings(dialog) -> None:
     volume = getattr(dialog, "local_music_volume_spin", None)
     if volume is not None:
         dialog.config.set("local_music_volume", int(volume.value()))
+    bubble = getattr(dialog, "local_music_bubble_lyrics_check", None)
+    if bubble is not None:
+        dialog.config.set("local_music_bubble_lyrics", bubble.isChecked())
 
 
 def save_source_settings(dialog) -> None:

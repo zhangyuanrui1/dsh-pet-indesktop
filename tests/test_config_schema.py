@@ -126,6 +126,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "local_music_dir",
         "local_music_prefer_cover",
         "local_music_volume",
+        "local_music_bubble_lyrics",
         "local_music_dir",
         "local_music_prefer_cover",
         "local_music_volume",
@@ -228,6 +229,7 @@ SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "ch
 # 默认值 dict 键集合现状快照 = 白名单 ∪ 特例键。
 # 2026-09-17 加入 music_player_paths（交付前审查 P1-3 登记）。
 # 2026-10-28 加入本地点歌 3 键（local_music_dir / prefer_cover / volume）。
+# 2026-10-29 加入 local_music_bubble_lyrics（歌词气泡开关）。
 # 2026-10-28 加入本地点歌 3 键（local_music_dir / prefer_cover / volume）。
 # 2026-09-22 加入点击台词朗读 / 台词本地语音预缓存 / 自言自语配图概率 3 键
 # （self_talk_speak_enabled、self_talk_voice_precache_enabled、self_talk_image_chance）。

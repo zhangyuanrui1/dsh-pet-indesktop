@@ -1892,7 +1892,8 @@ class ModernSettingsDialog(QDialog):
         # 音乐模块未激活：等价于 todo 组形态——两组的行**照常 claim**（防掉「待分类」
         # 并保有控件），但不挂进标签页、保存也不写回；重新激活后原样回来。
         music_rows = claim("music_sing", "music_lyric", "music_lyric_lead", "music_browser_media", "foobar_lyrics",
-                           "local_music_dir", "local_music_prefer_cover", "local_music_volume")
+                           "local_music_dir", "local_music_prefer_cover", "local_music_volume",
+                           "local_music_bubble_lyrics")
         music_on = _fa.is_active("music")
         # 「桌宠」域（2026-10-08 第二刀）：域内是两个**互斥任务**——「它长什么样 /
         # 唱不唱歌」与「它怎么动 / 怎么撞」，页内切成两个标签，首屏只管一个任务。

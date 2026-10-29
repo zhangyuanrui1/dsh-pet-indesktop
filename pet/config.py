@@ -1221,10 +1221,11 @@ class Config:
             # 逃生口，也能在「设置 → 桌宠 → 播放器路径（高级）」里改（
             # settings_music.build_music_player_rows），空 = 走自动搜索。
             "music_player_paths": {},
-            # 本地点歌：音乐目录 + 点歌默认版本 + 音乐音量（详见 local_library.py）。
+            # 本地点歌：音乐目录 + 点歌默认版本 + 音乐音量 + 歌词气泡（详见 local_library.py）。
             "local_music_dir": "",  # 空 = 未配置；例：D:\\dshjingyu\\music
             "local_music_prefer_cover": True,  # 点歌默认播「龙呼呼版」，没有翻唱回落原曲
             "local_music_volume": 80,  # 音乐音量（0~100）；语音响起时自动压低到 20%
+            "local_music_bubble_lyrics": True,  # 点歌时在气泡里滚动显示本地 .lrc 歌词
             "agent_cost_enabled": False,  # Agent 本轮结束时显示消费金额（用余额差值估算）
             "golden_spin_on_click": False,  # 点击回应动画结束后自动接一段黄金回旋
             "golden_spin_direct": False,  # 点击触发黄金回旋时跳过点击动画，直接回旋并逐圈加速
@@ -1598,6 +1599,7 @@ class Config:
             "local_music_dir",
             "local_music_prefer_cover",
             "local_music_volume",
+            "local_music_bubble_lyrics",
             "agent_cost_enabled",
             "golden_spin_on_click",
             "golden_spin_direct",
@@ -2189,6 +2191,9 @@ class Config:
         self.data["local_music_volume"] = int(
             _float_or_default(self.data.get("local_music_volume"), 80.0, 0.0, 100.0)
         )
+        self.data["local_music_bubble_lyrics"] = _bool_or_default(
+            self.data.get("local_music_bubble_lyrics"), True
+        )
         prewarm = str(self.data.get("media_prewarm", "balanced") or "balanced").strip().lower()
         self.data["media_prewarm"] = prewarm if prewarm in {"full", "balanced", "minimal"} else "balanced"
         # 批10-A3：默认 32→8（预测式预热使能）；32 是批9 引入仅一天的旧默认，
@@ -2350,6 +2355,7 @@ class Config:
             "local_music_dir",
             "local_music_prefer_cover",
             "local_music_volume",
+            "local_music_bubble_lyrics",
             "mem_skip_foreground",
             "mem_min_size_mb",
             "character_profiles",

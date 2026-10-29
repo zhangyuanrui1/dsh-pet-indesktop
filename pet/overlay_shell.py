@@ -1171,6 +1171,8 @@ class OverlayShell(QObject):
         self._slot_signature_cache = None
         # 音乐（歌词）宿主：懒建（window_optional_services 同款生命周期）
         self._music_lyric = None
+        # 本地点歌歌词气泡（同上，懒建；零网络请求，礼仪对齐 _music_lyric）
+        self._local_lyric_bubble = None
         # 「看看屏幕」限流/忙碌状态（window.py 同名口径）
         self._look_busy = False
         self._last_look_ts = 0.0
@@ -3408,6 +3410,21 @@ class OverlayShell(QObject):
 
             self._music_lyric = MusicLyricController(self)
         return self._music_lyric
+
+    def install_local_lyric_bubble(self):
+        """安装本地点歌歌词气泡（幂等；无音乐模块 → None 静默降级）。
+
+        逐行对齐 ``window_optional_services.install_local_lyric_bubble``：
+        取词源是本地 .lrc，只消费 ``isVisible / show_bubble / _speech_bubble``
+        等本壳已具备的面。
+        """
+        if not feature_activation.is_active("music"):
+            return None
+        if self._local_lyric_bubble is None:
+            from .music.local_lyric_bubble import LocalLyricBubble
+
+            self._local_lyric_bubble = LocalLyricBubble(self)
+        return self._local_lyric_bubble
 
     def sync_music_lyric(self) -> None:
         """按配置启停歌词显示（不再启用且从未装过 → 不白养定时器）。"""

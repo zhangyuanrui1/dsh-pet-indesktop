@@ -501,6 +501,10 @@ def build_pet_controls(host) -> None:
     host.local_music_volume_spin.setValue(
         int(host.config.get("local_music_volume", 80))
     )
+    host.local_music_bubble_lyrics_check = ToggleSwitch(host)
+    host.local_music_bubble_lyrics_check.setChecked(
+        bool(host.config.get("local_music_bubble_lyrics", True))
+    )
     host.golden_spin_click_check = ToggleSwitch(host)
     host.golden_spin_click_check.setChecked(bool(host.config.get("golden_spin_on_click", False)))
     host.golden_spin_direct_check = ToggleSwitch(host)

@@ -1557,6 +1557,20 @@ def _sync_local_player_from_config(pet) -> None:
     player.set_playlist(songs)
 
 
+def _install_local_lyric_bubble(pet) -> None:
+    """点歌/开面板前把歌词气泡装上（幂等；None 降级 = 不显示，照常唱）。
+
+    为什么在**起播侧**装而不是宿主初始化：歌词气泡是"点了歌才有的内容"，
+    从不点歌的会话不该白养一个 500ms 定时器。
+    """
+    installer = getattr(pet, "install_local_lyric_bubble", None)
+    if callable(installer):
+        try:
+            installer()
+        except Exception:  # noqa: BLE001 —— 歌词气泡装不上不许拖垮点歌
+            log.debug("本地点歌歌词气泡安装失败", exc_info=True)
+
+
 def open_songbook(pet) -> None:
     """打开歌单面板（菜单与设置页共用入口）。"""
     if _music_gated():
@@ -1564,6 +1578,7 @@ def open_songbook(pet) -> None:
     from ..music.songbook_dialog import SongbookDialog
 
     _sync_local_player_from_config(pet)
+    _install_local_lyric_bubble(pet)
     SongbookDialog(pet.cfg, parent=_dialog_parent(pet)).exec()
 
 
@@ -1584,6 +1599,10 @@ def add_music_request(menu: QMenu, pet, *, icons: bool = True):
 
     目录未配置 / 目录里没有歌 → **置灰一项并说明原因**（Runtime Disabled：
     保留位置 + 解释原因，而不是悄悄藏掉让用户以为功能坏了）。
+
+    子菜单顶部是**播放控制组**（暂停/切歌/上一首/停止，文案与外部播放器那组
+    一致）：菜单打开时按播放器状态定置灰，打开菜单本身就会推歌单进播放器
+    （``_sync_local_player_from_config``），所以只要有歌、切歌就能用。
     """
     from ..music.local_library import MENU_MAX_SONGS, choose_variant, variant_label
 
@@ -1602,11 +1621,51 @@ def add_music_request(menu: QMenu, pet, *, icons: bool = True):
     _sync_local_player_from_config(pet)
     prefer_cover = bool(pet.cfg.get("local_music_prefer_cover", True))
 
+    # ---------------------------------------------------------------- 播放控制
+    # 与外部播放器那组按钮（music_pause / music_next / music_prev / music_quit）
+    # 同款文案同款图标，但目标换成**本地播放器**：本地调用是纯 QMediaPlayer，
+    # 主线程安全，不需要 _run_music_off_main 那套线程搬运。
+    def _ctl(fn) -> None:
+        if _music_gated():
+            return
+        fn()
+
+    player = _shared_local_player()
+    has_current = player.current_song is not None
+    can_skip = player.can_skip()
+    submenu.addSeparator()
+    pause_item = add_action(
+        submenu, "让人家歇一会儿嘛（暂停 / 播放）", "pause" if icons else None,
+        lambda: _ctl(_shared_local_player().toggle_play_pause),
+        close_on_trigger=True,
+    )
+    pause_item.setEnabled(has_current)
+    next_item = add_action(
+        submenu, "给主人换一首（切歌）", "play" if icons else None,
+        lambda: _ctl(lambda: _shared_local_player().skip(+1)),
+        close_on_trigger=True,
+    )
+    next_item.setEnabled(can_skip)
+    prev_item = add_action(
+        submenu, "人家想再听刚才那首（上一首）", "play" if icons else None,
+        lambda: _ctl(lambda: _shared_local_player().skip(-1)),
+        close_on_trigger=True,
+    )
+    prev_item.setEnabled(can_skip)
+    stop_item = add_action(
+        submenu, "人家今天不唱了（停止）", "stop" if icons else None,
+        lambda: _ctl(_shared_local_player().stop), close_on_trigger=True,
+    )
+    stop_item.setEnabled(has_current)
+    stop_item.setToolTip("只停本地点歌的播放；外部播放器的「退出音乐模式」不含在内")
+    submenu.addSeparator()
+
     def _sing(song, _pet=pet) -> None:
         if _music_gated():
             return
         # 起播前再同步一次：菜单打开到点击之间配置可能被设置页改过。
         _sync_local_player_from_config(_pet)
+        _install_local_lyric_bubble(_pet)
         _shared_local_player().play_song(song)
 
     for song in songs[:MENU_MAX_SONGS]:

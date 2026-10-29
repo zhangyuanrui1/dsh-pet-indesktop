@@ -749,6 +749,16 @@ class SpriteMenuFacade:
         installer = getattr(host, "install_music_lyric", None)
         return installer() if callable(installer) else None
 
+    def install_local_lyric_bubble(self):
+        """本地点歌歌词气泡的安装面（幂等；无宿主 → None 静默降级）。
+
+        与 ``install_music_lyric`` 共用宿主（``_music_host``）：两套安装器
+        都挂在同一个壳/窗口上，先装哪个都行，互不影响。
+        """
+        host = self._music_host()
+        installer = getattr(host, "install_local_lyric_bubble", None)
+        return installer() if callable(installer) else None
+
     # ---------------------------------------------------------------- 菜单原位重开
     def reopen_context_menu(self, menu) -> None:
         """按原位立即重开右键菜单（window.py ``reopen_context_menu`` 的 overlay

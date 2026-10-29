@@ -55,6 +55,7 @@ class WindowFeatureGateMixin:
     _edge_probe: Any = None
     _throw_egg: Any = None
     _music_lyric: Any = None
+    _local_lyric_bubble: Any = None
 
     # ------------------------------------------------------------ 判定
     def _proactive_wanted(self) -> bool:
@@ -161,6 +162,20 @@ class WindowFeatureGateMixin:
             from .music.lyric_controller import MusicLyricController
             self._music_lyric = MusicLyricController(self)
         return self._music_lyric
+
+    def install_local_lyric_bubble(self):
+        """安装本地点歌歌词气泡（幂等）。
+
+        本地点歌（``music/local_player``）的歌词来自歌文件夹的本地 .lrc，
+        零网络请求，礼仪逐条对齐 ``install_music_lyric`` 那套（让路 / 被抢占
+        识别）。音乐模块未激活：返回 None。调用方全部按 None 降级。
+        """
+        if not feature_activation.is_active("music"):
+            return None
+        if self._local_lyric_bubble is None:
+            from .music.local_lyric_bubble import LocalLyricBubble
+            self._local_lyric_bubble = LocalLyricBubble(self)
+        return self._local_lyric_bubble
 
     def set_instrumental_playing(self, on: bool) -> None:
         """标记"当前放的是纯音乐"，让音乐自动唱歌不再触发。

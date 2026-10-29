@@ -314,6 +314,7 @@ FEATURES: dict[str, FeatureSpec] = {
             "local_music_dir",
             "local_music_prefer_cover",
             "local_music_volume",
+            "local_music_bubble_lyrics",
             "foobar_lyrics_enabled",
             "foobar_title_format",
             "music_player_paths",

@@ -311,8 +311,9 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 行本体在 settings_interaction / settings_pet_controls，但 claim 与分页装配留在本文件。
 # 2026-10-28 再上调到 2736：音乐关联组新增「本地点歌」三行（目录/默认版本/音量），
 # 行本体在 music/settings.local_music_rows，本文件只多出装配、claim 与保存各一行。
-# 实测 2736；再涨就该把互动域那一段拆成独立页模块了。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2736  # 2026-10-28：本地点歌三行
+# 2026-10-29 再上调到 2737：本地点歌加「歌词气泡」一行，claim 的续行多出一行。
+# 实测 2737；再涨就该把互动域那一段拆成独立页模块了。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2737  # 2026-10-29：歌词气泡一行
 
 
 def _read(name: str) -> str:

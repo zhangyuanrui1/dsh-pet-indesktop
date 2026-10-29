@@ -57,6 +57,7 @@ class LocalMusicPlayer(QObject):
         self._ducked = False
         self._playlist: list[local_library.Song] = []
         self._current: local_library.Song | None = None
+        self._current_path = ""           # 正在播的音频文件（歌词气泡标版本用）
 
         self._player.positionChanged.connect(self._on_position)
         self._player.durationChanged.connect(self._on_position)
@@ -88,6 +89,7 @@ class LocalMusicPlayer(QObject):
     def play_path(self, song: local_library.Song, path: str) -> None:
         log.info("点歌播放：%s ← %s", song.name, path)
         self._current = song
+        self._current_path = path
         self._player.setSource(QUrl.fromLocalFile(path))
         self._player.play()
         self.track_changed.emit(song.name, path)
@@ -118,6 +120,10 @@ class LocalMusicPlayer(QObject):
 
     def set_playlist(self, songs: list[local_library.Song]) -> None:
         self._playlist = list(songs)
+
+    def can_skip(self) -> bool:
+        """歌单里能不能切歌（菜单置灰判据；skip 自身也有同款守卫）。"""
+        return bool(self._playlist) and self._current is not None
 
     # ------------------------------------------------------------ 音量与压低
 
@@ -178,6 +184,10 @@ class LocalMusicPlayer(QObject):
     @property
     def current_song(self) -> local_library.Song | None:
         return self._current
+
+    @property
+    def current_path(self) -> str:
+        return self._current_path
 
     def is_playing(self) -> bool:
         return self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
