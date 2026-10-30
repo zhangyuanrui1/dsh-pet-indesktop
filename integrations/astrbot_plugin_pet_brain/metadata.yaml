@@ -1,0 +1,8 @@
+name: astrbot_plugin_pet_brain
+display_name: 桌宠大脑桥接
+desc: 私聊全量接管、群聊命中触发词时，把消息（含图片，支持看图）转发到本机桌宠大脑 HTTP 服务（共享大肥鱼人设与记忆）并接管回复；回复按"一次一句、连发 1~3 条"的形式发送，像真人聊天。未接管的消息仍由 AstrBot 默认处理。
+help: 私聊直接聊天或发图即由桌宠大脑回复（一条一句、会连发几条）；群聊需提到"大肥鱼"或"桌宠"，并合并为一条。插件设置里可改大脑地址、token、触发词、私聊接管开关、QQ 白名单和多条消息的间隔。
+version: v0.4.0
+author: WorkBuddy
+support_platforms:
+  - aiocqhttp

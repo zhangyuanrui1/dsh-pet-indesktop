@@ -98,3 +98,11 @@ dist-android/
 
 # 素材包构建产物（发布门输出，发布到 Release 后即可删）
 dist-packs/
+
+# 本地虚拟环境（体积数百 MB，绝不入库；换机器用 python -m venv .venv 重建）
+.venv/
+
+# 桌宠大脑（QQ 接入）运行期文件：token 是机密，日志是运行产物
+brain_token.txt
+brain_server.log
+

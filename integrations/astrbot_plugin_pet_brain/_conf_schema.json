@@ -1,0 +1,42 @@
+{
+  "brain_url": {
+    "type": "string",
+    "default": "http://127.0.0.1:8765",
+    "description": "桌宠大脑 HTTP 服务地址（对应 run_brain_server.bat 启动的 pet/brain_server.py）"
+  },
+  "brain_token": {
+    "type": "string",
+    "default": "",
+    "description": "PET_BRAIN_TOKEN，必须与 brain_token.txt（或启动日志里生成的那串）完全一致，否则会被 401 拒绝。"
+  },
+  "triggers": {
+    "type": "string",
+    "default": "大肥鱼,桌宠",
+    "description": "触发词，逗号分隔；消息里含任一触发词时由大脑接管回复"
+  },
+  "timeout": {
+    "type": "int",
+    "default": 60,
+    "description": "请求大脑服务的超时时间（秒）"
+  },
+  "private_always": {
+    "type": "bool",
+    "default": true,
+    "description": "私聊是否全量接管（不依赖触发词）。开启后私聊每一句都由桌宠大脑回复，语气和长度才和桌面一致；关闭则只有含触发词才接管"
+  },
+  "allowed_user_ids": {
+    "type": "string",
+    "default": "",
+    "description": "允许触发的 QQ 号白名单，逗号分隔，填你自己的号。留空=不限制（有隐私风险：任何人私聊小号都会拿到注入了你个人记忆的回复）"
+  },
+  "bubble_gap_min": {
+    "type": "float",
+    "default": 0.7,
+    "description": "多条消息之间的最小间隔（秒）。太短会像被一刀切开，建议 0.6~0.9"
+  },
+  "bubble_gap_max": {
+    "type": "float",
+    "default": 1.4,
+    "description": "多条消息之间的最大间隔（秒）。太长会显得卡顿，建议 1.2~1.8"
+  }
+}
